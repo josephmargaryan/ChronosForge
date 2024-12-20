@@ -1,10 +1,8 @@
 import numpy as np
-import jax
 import jax.numpy as jnp
 from jax import random
 import matplotlib.pyplot as plt
 
-import numpyro
 from numpyro import sample, deterministic
 from numpyro.distributions import Normal, Gamma
 from numpyro.optim import Adam
