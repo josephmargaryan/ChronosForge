@@ -6,6 +6,7 @@ from dataset import HierarchicalDataset
 import pickle
 from transformers import AutoTokenizer, AutoModel
 from model import DocumentClassifier
+import pandas as pd
 
 
 def process_document(
@@ -29,7 +30,7 @@ def process_document(
         "input_ids"
     ].squeeze(0)
 
-    if tokens.size(0) == 0:  # Handle empty input
+    if tokens.size(0) == 0:
         tokens = torch.tensor([tokenizer.unk_token_id])
 
     chunks = [
@@ -98,17 +99,15 @@ def inference(
     with open(label_encoder_path, "rb") as f:
         label_encoder = pickle.load(f)
 
-    # Ensure models are on the correct device and in evaluation mode
     transformer_model.to(device)
     classifier_model.to(device)
     transformer_model.eval()
     classifier_model.eval()
 
-    # Create a DataLoader for the dataset
     dataloader = DataLoader(
         HierarchicalDataset(
             texts=df["x"].tolist(),
-            labels=[0] * len(df),  # Labels are not used in inference
+            labels=[0] * len(df),
             tokenizer=tokenizer,
             model=transformer_model,
             device=device,
@@ -121,41 +120,34 @@ def inference(
 
     all_preds = []
     for batch in tqdm(dataloader, desc="Performing inference"):
-        document_representations, _ = batch  # Document representations and dummy labels
+        document_representations, _ = batch
         document_representations = document_representations.to(device)
 
         with torch.no_grad():
             logits = classifier_model(
                 document_representations
             )  # Pass through classifier
-            preds = torch.argmax(logits, dim=1)  # Predicted class labels
+            preds = torch.argmax(logits, dim=1)
             all_preds.extend(preds.cpu().numpy())
 
-    # Decode the class labels back to their original form
     return label_encoder.inverse_transform(all_preds)
 
 
 if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available else "cpu")
-    # Load the pretrained models and tokenizer
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     transformer_model = AutoModel.from_pretrained("bert-base-uncased").to(device)
 
-    # Load the trained DocumentClassifier
-    hidden_size = (
-        transformer_model.config.hidden_size
-    )  # Hidden size from transformer model
-    num_classes = 3  # Replace with the number of classes in your dataset
+    hidden_size = transformer_model.config.hidden_size
+    num_classes = 3
     classifier_model = DocumentClassifier(hidden_size, num_classes)
     classifier_model.load_state_dict(torch.load("best_model.pth", map_location=device))
     classifier_model.to(device)
 
-    # Load the dataset
     train_df = pd.read_csv("train_data.csv")
     label_encoder_path = "label_encoder.pkl"
 
-    # Perform inference
     predictions = inference(
         transformer_model=transformer_model,
         classifier_model=classifier_model,
@@ -168,9 +160,7 @@ if __name__ == "__main__":
         batch_size=16,
     )
 
-    # Add predictions to the DataFrame
     train_df["predicted_labels"] = predictions
 
-    # Save the predictions
     train_df.to_csv("train_data_with_predictions.csv", index=False)
     print("Inference complete. Predictions saved to 'train_data_with_predictions.csv'.")

@@ -4,9 +4,11 @@ matplotlib
 seaborn
 scipy
 numpyro 
+optax
 pyro-ppl
 jax 
-flax
 torch 
 scikit-learn
-statsmodels
+# transformers
+# umap-learn
+# statsmodels

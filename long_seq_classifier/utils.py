@@ -1,6 +1,7 @@
 import torch
 from tqdm import tqdm
 
+
 def apply_pooling(cls_embeddings, pooling_strategy="mean"):
     """
     Apply pooling to CLS token embeddings to generate a document representation.

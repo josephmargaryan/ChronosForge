@@ -17,8 +17,8 @@ def train(
     scaler = torch.amp.GradScaler()
     train_losses = []
     val_losses = []
-    val_accuracies = []  
-    val_f1_scores = []  
+    val_accuracies = []
+    val_f1_scores = []
     best_model_state = None
     counter = 0
     best_val_loss = float("inf")
@@ -41,7 +41,7 @@ def train(
             scaler.update()
             avg_train_loss.append(loss.item())
         avg_train_loss = np.mean(avg_train_loss)
-        train_losses.append(avg_train_loss)  
+        train_losses.append(avg_train_loss)
 
         avg_val_loss = []
         all_preds = []
@@ -54,13 +54,11 @@ def train(
                     output = model(x)
                     loss = criterion(output, y)
                     avg_val_loss.append(loss.item())
-                    all_preds.append(
-                        torch.argmax(output, dim=1)
-                    ) 
+                    all_preds.append(torch.argmax(output, dim=1))
                     all_labels.append(y)
 
         avg_val_loss = np.mean(avg_val_loss)
-        val_losses.append(avg_val_loss)  
+        val_losses.append(avg_val_loss)
 
         all_preds = torch.cat(all_preds)
         all_labels = torch.cat(all_labels)
@@ -68,8 +66,8 @@ def train(
         val_f1 = f1_score(
             all_labels.cpu().numpy(), all_preds.cpu().numpy(), average="weighted"
         )
-        val_accuracies.append(val_accuracy)  # Save validation accuracy
-        val_f1_scores.append(val_f1)  # Save validation F1 score
+        val_accuracies.append(val_accuracy)
+        val_f1_scores.append(val_f1)
 
         if best_val_loss > avg_val_loss:
             best_val_loss = avg_val_loss
@@ -90,7 +88,6 @@ def train(
     if best_model_state is not None:
         torch.save(best_model_state, "best_model.pth")
 
-    # Plotting metrics
     df = pd.DataFrame(
         {
             "train": train_losses,
@@ -117,7 +114,6 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=3)
 
-    # Train the model
     train(
         model=model,
         num_epochs=10,
