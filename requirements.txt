@@ -1,0 +1,12 @@
+pandas 
+numpy 
+matplotlib
+seaborn
+scipy
+numpyro 
+pyro-ppl
+jax 
+flax
+torch 
+scikit-learn
+statsmodels
