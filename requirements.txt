@@ -10,3 +10,4 @@ funsor
 diffrax
 optax
 einops
+arviz
