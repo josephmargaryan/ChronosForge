@@ -13,12 +13,13 @@ setup(
         "numpyro",
         "torch",
         "matplotlib",
+        "seaborn",
         "flax",
         "pandas",
         "optax",
         "diffrax",
         "funsor",
-        "einops"
+        "einops",
     ],
     python_requires=">=3.7",
 )
