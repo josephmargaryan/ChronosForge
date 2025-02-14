@@ -335,7 +335,7 @@ def _block_circulant_matmul(W, x, d_bernoulli=None):
     batch_size, d_in = x.shape
 
     k_out, k_in, b = W.shape
-    d_out = k_out * b
+    d_out = k_out * b # noqa
 
     # Possibly multiply x by the Bernoulli diagonal
     if d_bernoulli is not None:

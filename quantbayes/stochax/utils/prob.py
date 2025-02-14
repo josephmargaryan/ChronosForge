@@ -4,7 +4,12 @@ import equinox as eqx
 import numpyro
 import numpyro.distributions as dist
 
-__all__ = ["bayesianize", "prior_fn"]
+__all__ = [
+    "bayesianize", 
+    "prior_fn",
+    "decaying_prior",
+    "decaying_prior_block"
+    ]
 # ------------------------------------------------------------------------------
 # Helper: Bayesianize an Equinox module
 # ------------------------------------------------------------------------------
@@ -50,18 +55,35 @@ def prior_fn(shape, mean=0.0, std=1.0, dist_cls=dist.Normal):
     """
     return dist_cls(mean, std).expand(shape).to_event(len(shape))
 
-
-def hierarchical_prior_fn(shape):
+def decaying_prior(shape, alpha=1.0):
     """
-    UNDER CONSTRUCTION
-    The layer names will get duplicated
-    which makes numpyro yield an error
-
-    An alternative to the prior_fn
-    which uses hierarchical priors that "learns"
-    what the best mean and std should be
+    Example uscase:
+    fft_layer = FFTDirectPriorLinear(in_features=n, 
+            key=key, 
+            init_scale=1.0, 
+            prior_fn=decaying_prior)
     """
-    hyper_mean = numpyro.sample("hyper_mean", dist.Normal(0, 1))
-    hyper_std = numpyro.sample("hyper_std", dist.Exponential(1.0))
+    indices = jnp.arange(shape[0])
+    # Standard deviation decays with frequency index
+    stds = 1.0 / jnp.sqrt(1.0 + (indices ** alpha))
+    return dist.Normal(0.0, stds).to_event(1)
 
-    return dist.Normal(hyper_mean, hyper_std).expand(shape).to_event(len(shape))
+
+def decaying_prior_block(shape, alpha=1.0):
+    """
+    Example usage:
+
+    block_layer = BlockFFTDirectPriorLayer(
+    in_features=..., 
+    out_features=..., 
+    block_size=..., 
+    key=..., 
+    real_prior_fn=lambda shape: decaying_prior_block(shape, alpha=1.0),
+    imag_prior_fn=lambda shape: decaying_prior_block(shape, alpha=1.0)
+    )
+
+    """
+    indices = jnp.arange(shape[0])
+    stds = 1.0 / jnp.sqrt(1.0 + (indices ** alpha))
+    return dist.Normal(0.0, stds).to_event(1)
+
