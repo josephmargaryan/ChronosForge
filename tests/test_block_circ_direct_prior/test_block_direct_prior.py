@@ -11,7 +11,7 @@ from quantbayes.bnn.utils import BayesianAnalysis
 from quantbayes.stochax.utils import (
     get_block_fft_full_for_given_params,
     plot_block_fft_spectra,
-    visualize_block_circulant_kernels,
+    visualize_block_circulant_kernels
 )
 
 # Generate synthetic regression data.
@@ -31,7 +31,7 @@ class MyCircBlock(bnn.Module):
             in_features=in_features,
             out_features=16,
             block_size=4,
-            name="block_fft_layer",
+            name="block_fft_layer"
         )
         X = block_layer(X)
         X = jax.nn.tanh(X)
