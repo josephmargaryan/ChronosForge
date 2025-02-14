@@ -11,9 +11,11 @@ from numpyro.optim import Adam, Adagrad, SGD
 import pickle
 import numpy as np
 
-from quantbayes.stochax.utils.fft_direct_prior import (
+from quantbayes.stochax.utils import (
     visualize_circulant_kernel,
     plot_fft_spectrum,
+    plot_block_fft_spectra,
+    visualize_block_circulant_kernels,
 )
 
 
@@ -1003,18 +1005,38 @@ class Module:
         plt.tight_layout()
         plt.show()
 
-    def visualize_fourier_spectrum(self, layer_obj, show=True):
+    def visualize_fourier_spectrum(layer_obj, show=True):
         """
-        After the model is fit, we do a forward pass with a *concrete set of parameters*,
-        then call get_fourier_coeffs(). That should be a device array we can host-convert safely.
+        After the model is fit, perform a forward pass so that the layer's Fourier coefficients
+        are computed and stored. Then, automatically detect whether the layer is a single circulant
+        or a block circulant one and call the corresponding visualization functions.
+
+        For a single circulant layer, get_fourier_coeffs() returns a 1D jnp.array of shape (n,).
+        For a block circulant layer, get_fourier_coeffs() returns a 3D jnp.array of shape
+        (k_out, k_in, block_size).
+
+        Returns:
+            Tuple of matplotlib figure objects.
         """
-        fft_full = layer_obj.get_fourier_coeffs()  # jnp.array of shape (n,)?
-        # The code below does jnp -> np conversion for plotting, so as long as we do NOT run
-        # inside a jit/scan, it should be safe.
-        fig1 = plot_fft_spectrum(fft_full, show=False)
-        fig2 = visualize_circulant_kernel(fft_full, show=False)
+        fft_full = layer_obj.get_fourier_coeffs()  # jnp.array
+
+        # Convert to host (NumPy) if necessary
+        fft_full_host = jax.device_get(fft_full)
+
+        if fft_full_host.ndim == 1:
+            # Single circulant version.
+            fig1 = plot_fft_spectrum(fft_full_host, show=False)
+            fig2 = visualize_circulant_kernel(fft_full_host, show=False)
+        elif fft_full_host.ndim == 3:
+            # Block circulant version.
+            fig1 = plot_block_fft_spectra(fft_full_host, show=False)
+            fig2 = visualize_block_circulant_kernels(fft_full_host, show=False)
+        else:
+            raise ValueError("Unexpected shape for Fourier coefficients.")
+
         if show:
             plt.show()
+
         return fig1, fig2
 
     def save_params(self, file_path):

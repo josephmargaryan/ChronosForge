@@ -7,6 +7,8 @@ __all__ = [
     "Linear",
     "FFTLinear",
     "FFTDirectPriorLinear",
+    "BlockCirculantLayer",
+    "BlockFFTDirectPriorLayer",
     "ParticleLinear",
     "FFTParticleLinear",
     "Conv1d",
@@ -138,7 +140,7 @@ class Linear:
         return jnp.dot(X, w) + b
 
 
-def fft_matmul(first_row: jnp.ndarray, X: jnp.ndarray) -> jnp.ndarray:
+def _fft_matmul(first_row: jnp.ndarray, X: jnp.ndarray) -> jnp.ndarray:
     """
     Perform circulant matrix multiplication using FFT.
 
@@ -209,7 +211,7 @@ class FFTLinear:
         bias_circulant = numpyro.sample(
             f"{self.name}_bias_circulant", self.bias_prior_fn([self.in_features])
         )
-        hidden = fft_matmul(first_row, X) + bias_circulant[None, :]
+        hidden = _fft_matmul(first_row, X) + bias_circulant[None, :]
         return hidden
 
 
@@ -317,6 +319,310 @@ class FFTDirectPriorLinear:
         with numpyro.handlers.seed(rng_seed=rng_key):
             _, fft_full = self._forward_and_get_coeffs(X)
         return jax.lax.stop_gradient(fft_full)
+
+
+def _block_circulant_matmul(W, x, d_bernoulli=None):
+    """
+    Perform block-circulant matmul using FFT.
+    W: shape (k_out, k_in, b), each row W[i,j,:] is the "first row" of a b x b circulant block.
+    x: shape (batch, d_in) or (d_in,)
+    d_bernoulli: shape (d_in,) of ±1, if given
+    Returns: shape (batch, d_out).
+    """
+    # If x is 1D, reshape to (1, d_in)
+    if x.ndim == 1:
+        x = x[None, :]
+    batch_size, d_in = x.shape
+
+    k_out, k_in, b = W.shape
+    d_out = k_out * b
+
+    # Possibly multiply x by the Bernoulli diagonal
+    if d_bernoulli is not None:
+        x = x * d_bernoulli[None, :]
+
+    # Zero-pad x to length (k_in * b)
+    pad_len = k_in * b - d_in
+    if pad_len > 0:
+        x = jnp.pad(x, ((0, 0), (0, pad_len)))
+
+    # Reshape into blocks: shape (batch, k_in, b)
+    x_blocks = x.reshape(batch_size, k_in, b)
+
+    # We'll accumulate output for each block-row i
+    def one_block_mul(w_ij, x_j):
+        # w_ij: (b,)   first row of circulant
+        # x_j:  (batch, b)
+        c_fft = jnp.fft.fft(w_ij)  # (b,)
+        X_fft = jnp.fft.fft(x_j, axis=-1)  # (batch, b)
+        block_fft = X_fft * jnp.conjugate(c_fft)[None, :]
+        return jnp.fft.ifft(block_fft, axis=-1).real  # (batch, b)
+
+    def compute_blockrow(i):
+        # Sum over j=0..k_in-1 of circ(W[i,j]) x_j
+        def sum_over_j(carry, j):
+            w_ij = W[i, j, :]  # (b,)
+            x_j = x_blocks[:, j, :]  # (batch, b)
+            block_out = one_block_mul(w_ij, x_j)
+            return carry + block_out, None
+
+        init = jnp.zeros((batch_size, b))
+        out_time, _ = jax.lax.scan(sum_over_j, init, jnp.arange(k_in))
+        return out_time  # shape (batch, b)
+
+    out_blocks = jax.vmap(compute_blockrow)(jnp.arange(k_out))  # (k_out, batch, b)
+    out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(batch_size, k_out * b)
+    return out_reshaped
+
+
+class BlockCirculantLayer:
+    """
+    NumPyro-style block-circulant layer:
+      - Samples W of shape (k_out, k_in, b).
+      - Optionally samples a Bernoulli diagonal for input dimension d_in.
+      - Then does block-circulant matmul in the forward pass.
+    """
+
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        block_size,
+        name="block_circ_layer",
+        W_prior_fn=lambda shape: dist.Normal(0, 1).expand(
+            shape
+        ),  # can add .to_event(...)
+        diag_prior_fn=None,  # optional Bernoulli prior
+        bias_prior_fn=None,  # optional bias
+    ):
+        self.in_features = in_features
+        self.out_features = out_features
+        self.block_size = block_size
+        self.name = name
+
+        # We'll define k_in, k_out
+        self.k_in = (in_features + block_size - 1) // block_size
+        self.k_out = (out_features + block_size - 1) // block_size
+
+        self.W_prior_fn = W_prior_fn
+        self.diag_prior_fn = diag_prior_fn
+        self.bias_prior_fn = bias_prior_fn
+
+    def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
+        # 1) Sample W
+        W = numpyro.sample(
+            f"{self.name}_W",
+            self.W_prior_fn([self.k_out, self.k_in, self.block_size]),
+        )
+
+        # 2) (Optional) sample the Bernoulli diagonal
+        d_bernoulli = None
+        if self.diag_prior_fn is not None:
+            d_bernoulli = numpyro.sample(
+                f"{self.name}_D",
+                self.diag_prior_fn([self.in_features]),
+            )
+
+        # 3) Do the block-circulant multiplication
+        out = _block_circulant_matmul(W, X, d_bernoulli)
+
+        # 4) If we want a bias, we can sample a vector of shape (out_features,)
+        if self.bias_prior_fn is not None:
+            b = numpyro.sample(
+                f"{self.name}_bias",
+                self.bias_prior_fn([self.out_features]),
+            )
+            out = out + b[None, :]
+
+        # 5) Finally, slice if out_features < k_out * block_size
+        #    (some block_size combos might exceed the exact out_features).
+        k_out_b = self.k_out * self.block_size
+        if k_out_b > self.out_features:
+            out = out[:, : self.out_features]
+
+        return out
+
+
+def _ifft_block_multiply(block_fft: jnp.ndarray, x_block: jnp.ndarray) -> jnp.ndarray:
+    """
+    Given a single block's full FFT (length b) and the FFT of x_block,
+    compute the time-domain result of circulant(block) @ x_block via:
+       out_block = ifft( conj(block_fft) * X_fft ).real
+    The 'conjugate' appears if we define the first-row convention for the block.
+    Adjust if you prefer the direct multiply (depends on your convention).
+    """
+    X_fft = jnp.fft.fft(x_block, axis=-1)  # shape (batch, b)
+    out_fft = X_fft * jnp.conjugate(block_fft)[None, :]
+    return jnp.fft.ifft(out_fft, axis=-1).real
+
+
+class BlockFFTDirectPriorLayer:
+    """
+    A Numpyro-compatible block-circulant layer that:
+      - Divides the (in_features, out_features) space into (k_in, k_out) blocks, each of size (b x b).
+      - Samples real/imag half-spectra for each block from prior distributions,
+        then imposes Hermitian symmetry to get a length-b complex vector for each block.
+      - Multiplies the input x by this block-circulant matrix in the frequency domain.
+      - Optionally zero-pads the input if 'in_features' is not a multiple of 'b'.
+      - Stores the reconstructed “full” block-level FFT arrays in `self.last_fourier_coeffs`.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        block_size: int,
+        name: str = "block_fft_layer",
+        real_prior_fn=lambda shape: dist.Normal(0.0, 1.0).expand(shape),
+        imag_prior_fn=lambda shape: dist.Normal(0.0, 1.0).expand(shape),
+    ):
+        """
+        :param in_features: total input dimension
+        :param out_features: total output dimension
+        :param block_size: size of each circulant block (b)
+        :param name: prefix for NumPyro sample sites
+        :param real_prior_fn: prior generator for real part, typically Normal(0,1).expand(...)
+        :param imag_prior_fn: prior generator for imag part, typically Normal(0,1).expand(...)
+        """
+        self.in_features = in_features
+        self.out_features = out_features
+        self.block_size = block_size
+        self.name = name
+
+        # Number of blocks in each dimension
+        self.k_in = (in_features + block_size - 1) // block_size
+        self.k_out = (out_features + block_size - 1) // block_size
+
+        # Half-spectrum size for real signals
+        self.k_half = (block_size // 2) + 1
+
+        # Store the user-specified prior functions
+        self.real_prior_fn = real_prior_fn
+        self.imag_prior_fn = imag_prior_fn
+
+        # We'll store the final "full" FFT for each block (k_out, k_in, b) for plotting
+        self.last_fourier_coeffs = None  # shape: (k_out, k_in, block_size) complex
+
+    def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
+        """
+        Forward pass. We:
+          1) Sample real and imaginary half-spectrum for each block from the given priors,
+          2) Enforce zero imaginary part at freq=0 and freq=b/2 (if b is even),
+          3) Reconstruct the full length-b complex array with Hermitian symmetry,
+          4) Multiply X by the resulting block-circulant matrix in the freq domain,
+          5) Slice the result to size (batch, out_features) if needed,
+          6) Store the block-level FFT arrays in self.last_fourier_coeffs for later retrieval.
+
+        :param X: shape (batch, in_features) or (in_features,)
+        :returns: shape (batch, out_features)
+        """
+        out, block_fft_full = self._forward_and_get_fft(X)
+
+        # Keep a copy of the full block-level spectra for later visualization
+        self.last_fourier_coeffs = jax.lax.stop_gradient(block_fft_full)
+
+        return out
+
+    def _forward_and_get_fft(self, X: jnp.ndarray):
+        """Helper that does the actual logic and returns (output, block_fft_full)."""
+        if X.ndim == 1:
+            X = X[None, :]  # shape (1, in_features)
+        batch_size, d_in = X.shape
+
+        # (A) Sample the real and imaginary parts for shape (k_out, k_in, k_half).
+        #     We'll name them "real" and "imag" sites, using self.name as a prefix.
+        real_coeff = numpyro.sample(
+            f"{self.name}_real",
+            self.real_prior_fn([self.k_out, self.k_in, self.k_half]),
+        )
+        imag_coeff = numpyro.sample(
+            f"{self.name}_imag",
+            self.imag_prior_fn([self.k_out, self.k_in, self.k_half]),
+        )
+        # Enforce freq=0 is real-only => imag=0
+        imag_coeff = imag_coeff.at[..., 0].set(0.0)
+        # If block_size is even, freq=b/2 must be real => zero out the last imag index
+        if (self.block_size % 2 == 0) and (self.k_half > 1):
+            imag_coeff = imag_coeff.at[..., -1].set(0.0)
+
+        # (B) Reconstruct the full b-point FFT for each block, imposing Hermitian symmetry
+        def _reconstruct_block_spectrum(r_ij, i_ij):
+            # r_ij, i_ij each shape (k_half,)
+            # half_complex = r + 1j*i
+            half_complex = r_ij + 1j * i_ij
+            b = self.block_size
+            if (b % 2 == 0) and (self.k_half > 1):
+                # even length, last freq is real => place in the middle
+                nyquist = half_complex[-1].real[None]
+                block_fft = jnp.concatenate(
+                    [
+                        half_complex[:-1],
+                        nyquist,
+                        jnp.conjugate(half_complex[1:-1])[::-1],
+                    ]
+                )
+            else:
+                # odd length
+                block_fft = jnp.concatenate(
+                    [half_complex, jnp.conjugate(half_complex[1:])[::-1]]
+                )
+            return block_fft
+
+        # Vectorize over (k_out, k_in).
+        # The result has shape (k_out, k_in, block_size) (complex).
+        block_fft_full = jax.vmap(
+            lambda Rrow, Irow: jax.vmap(_reconstruct_block_spectrum)(Rrow, Irow),
+            in_axes=(0, 0),
+        )(real_coeff, imag_coeff)
+
+        # (C) Zero-pad X if needed so X has length k_in * block_size
+        pad_len = self.k_in * self.block_size - d_in
+        if pad_len > 0:
+            X = jnp.pad(X, ((0, 0), (0, pad_len)))
+
+        # Reshape X into shape (batch_size, k_in, block_size)
+        X_blocks = X.reshape(batch_size, self.k_in, self.block_size)
+
+        # (D) Perform the block-circulant multiplication in time domain,
+        #     using frequency-domain methods for each block row i.
+        # out[i] = sum_j ifft(conjugate(block_fft[i,j]) * fft(X_blocks[j]))
+        def compute_blockrow(i):
+            def scan_over_j(carry, j):
+                # block_fft_full[i, j] => shape (b,)
+                # X_blocks[:, j, :]   => shape (batch_size, b)
+                w_ij_fft = block_fft_full[i, j]
+                x_j = X_blocks[:, j, :]
+                block_out = _ifft_block_multiply(w_ij_fft, x_j)  # shape (batch_size, b)
+                return carry + block_out, None
+
+            init = jnp.zeros((batch_size, self.block_size))
+            out_time, _ = jax.lax.scan(scan_over_j, init, jnp.arange(self.k_in))
+            return out_time  # shape (batch_size, b)
+
+        # shape (k_out, batch_size, b)
+        out_blocks = jax.vmap(compute_blockrow)(jnp.arange(self.k_out))
+        # reorder => (batch_size, k_out, b)
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
+            batch_size, self.k_out * self.block_size
+        )
+
+        # (E) Slice if out_features < k_out * block_size
+        if self.k_out * self.block_size > self.out_features:
+            out_reshaped = out_reshaped[:, : self.out_features]
+
+        return out_reshaped, block_fft_full
+
+    def get_fourier_coeffs(self) -> jnp.ndarray:
+        """
+        Return the last computed *full* block-level FFT array of shape
+        (k_out, k_in, block_size) (complex). Raises ValueError if no forward pass was done yet.
+        """
+        if self.last_fourier_coeffs is None:
+            raise ValueError(
+                f"No Fourier coefficients available for layer '{self.name}'. "
+                "Call the layer once on some input to store them."
+            )
+        return self.last_fourier_coeffs
 
 
 class ParticleLinear:
@@ -452,7 +758,7 @@ class FFTParticleLinear:
             bias = biases[p_idx]  # Shape: (in_features,)
 
             # FFT multiplication for each particle
-            transformed = fft_matmul(
+            transformed = _fft_matmul(
                 first_row, X[p_idx]
             )  # Shape: (batch_size, in_features)
             return transformed + bias  # Shape: (batch_size, in_features)

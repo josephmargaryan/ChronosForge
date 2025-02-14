@@ -2,6 +2,7 @@ import arviz as az
 
 from quantbayes import bnn
 
+
 def evaluate_mcmc(model: bnn.Module) -> None:
     """
     Evaluate an MCMC model by computing common diagnostics.
@@ -10,7 +11,9 @@ def evaluate_mcmc(model: bnn.Module) -> None:
     :raises ValueError: If the model does not have inference results.
     """
     if not hasattr(model, "inference") or model.inference is None:
-        raise ValueError("The model does not have inference results. Please run inference first!")
+        raise ValueError(
+            "The model does not have inference results. Please run inference first!"
+        )
 
     idata = az.from_numpyro(model.inference)
     waic_result = az.waic(idata)

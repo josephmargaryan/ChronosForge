@@ -20,7 +20,7 @@ setup(
         "diffrax",
         "funsor",
         "einops",
-        "arviz"
+        "arviz",
     ],
     python_requires=">=3.7",
 )

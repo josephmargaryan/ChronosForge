@@ -1,10 +1,36 @@
-from .layers import *
+from .layers.layers import (
+    Linear,
+    FFTLinear,
+    FFTDirectPriorLinear,
+    BlockCirculantLayer,
+    ParticleLinear,
+    FFTParticleLinear,
+    Conv1d,
+    Conv2d,
+    FFTConv1d,
+    FFTConv2d,
+    TransposedConv2d,
+    FFTTransposedConv2d,
+    MaxPool2d,
+    SelfAttention,
+    MultiHeadSelfAttention,
+    PositionalEncoding,
+    TransformerEncoder,
+    LayerNorm,
+    LSTM,
+    GaussianProcessLayer,
+    VariationalLayer,
+    BlockFFTDirectPriorLayer,
+)
 from .layers.base import Module
 
 __all__ = [
     "Module",
     "Linear",
     "FFTLinear",
+    "FFTDirectPriorLinear",
+    "BlockCirculantLayer",
+    "BlockFFTDirectPriorLayer",
     "ParticleLinear",
     "FFTParticleLinear",
     "Conv1d",

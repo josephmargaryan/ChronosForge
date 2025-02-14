@@ -219,10 +219,10 @@ class FFTBinarySVI(BaseTask, BaseInference):
 if __name__ == "__main__":
 
     ############# Example Usage #############
-    from bnn.AutoML.fft.binary_classification.svi import FFTBinarySVI
-    from bnn.utils.entropy_analysis import EntropyAndMutualInformation
-    from bnn.utils.generalization_bound import BayesianAnalysis
-    from fake_data import generate_binary_classification_data
+    from quantbayes.bnn.AutoML.fft.binary_classification.svi import FFTBinarySVI
+    from quantbayes.bnn.utils.entropy_analysis import EntropyAndMutualInformation
+    from quantbayes.bnn.utils.generalization_bound import BayesianAnalysis
+    from quantbayes.fake_data import generate_binary_classification_data
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import log_loss
     import jax.random as jr

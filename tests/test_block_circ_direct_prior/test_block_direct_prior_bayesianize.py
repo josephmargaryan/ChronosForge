@@ -9,7 +9,7 @@ from quantbayes.stochax.utils import (
     prior_fn,
     plot_fft_spectrum,
     visualize_circulant_kernel,
-    FFTDirectPriorLinear,
+    BlockFFTDirectDet,
 )
 from quantbayes.bnn.utils import BayesianAnalysis, plot_hdi
 from quantbayes import bnn, fake_data
@@ -22,8 +22,12 @@ class MyDeterministicNet(eqx.Module):
 
     def __init__(self, in_features, *, key):
         k1, k2 = jr.split(key, 2)
-        self.layer1 = FFTDirectPriorLinear(
-            in_features=in_features, key=k1, init_scale=1.0
+        self.layer1 = BlockFFTDirectDet(
+            in_features=in_features,
+            out_features=16,
+            block_size=4,
+            key=k1,
+            init_scale=1.0,
         )
         self.layer2 = eqx.nn.Linear(in_features=in_features, out_features=1, key=k2)
 

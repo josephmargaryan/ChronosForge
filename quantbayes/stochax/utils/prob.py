@@ -4,7 +4,7 @@ import equinox as eqx
 import numpyro
 import numpyro.distributions as dist
 
-
+__all__ = ["bayesianize", "prior_fn"]
 # ------------------------------------------------------------------------------
 # Helper: Bayesianize an Equinox module
 # ------------------------------------------------------------------------------
@@ -27,7 +27,41 @@ def bayesianize(module: eqx.Module, prior_fn):
 
 
 # ------------------------------------------------------------------------------
-# Helper: Prior function defined as a normal distribution
+# Helper: Prior function
 # ------------------------------------------------------------------------------
-def prior_fn(shape):
-    return dist.Normal(0, 1).expand(shape).to_event(len(shape))
+def prior_fn(shape, mean=0.0, std=1.0, dist_cls=dist.Normal):
+    """
+    Returns a prior distribution for a given shape.
+
+    By default, it returns a Normal(0, 1) prior. Users can override the mean,
+    standard deviation, or even the distribution class if needed.
+
+    Parameters:
+        shape (tuple): The shape of the parameter array.
+        mean (float, optional): Mean of the prior distribution. Default is 0.0.
+        std (float, optional): Standard deviation of the prior distribution. Default is 1.0.
+        dist_cls (callable, optional): The NumPyro distribution class to use. Default is Normal.
+
+    Returns:
+        A NumPyro distribution expanded to `shape` with the correct event dimensions.
+
+    Example usage:
+        custom_prior_fn = lambda shape: prior_fn(shape, mean=2.1, std=3.4, dist_cls=dist.Uniform)
+    """
+    return dist_cls(mean, std).expand(shape).to_event(len(shape))
+
+
+def hierarchical_prior_fn(shape):
+    """
+    UNDER CONSTRUCTION
+    The layer names will get duplicated
+    which makes numpyro yield an error
+
+    An alternative to the prior_fn
+    which uses hierarchical priors that "learns"
+    what the best mean and std should be
+    """
+    hyper_mean = numpyro.sample("hyper_mean", dist.Normal(0, 1))
+    hyper_std = numpyro.sample("hyper_std", dist.Exponential(1.0))
+
+    return dist.Normal(hyper_mean, hyper_std).expand(shape).to_event(len(shape))

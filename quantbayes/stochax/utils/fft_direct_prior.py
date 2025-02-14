@@ -1,12 +1,3 @@
-#!/usr/bin/env python3
-"""
-fft_direct_prior_linear_with_tests.py
-
-This script defines an Equinox layer that performs FFT-based circulant
-matrix multiplication by directly storing its independent Fourier coefficients.
-It includes tests that verify both the numerical functionality of the layer and
-the visualization functions that display its Fourier coefficients and reconstructed kernel.
-"""
 import jax
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
@@ -19,7 +10,6 @@ __all__ = [
     "FFTDirectPriorLinear",
     "plot_fft_spectrum",
     "visualize_circulant_kernel",
-    "reconstruct_circulant_from_fft",
     "get_fft_full_for_given_params",
 ]
 
@@ -124,26 +114,23 @@ def circulant_from_fft(fft_full: jnp.ndarray) -> jnp.ndarray:
 
 def plot_fft_spectrum(fft_full: jnp.ndarray, show: bool = True):
     """
-    fft_full: a *concrete* JAX array of shape (n,) (complex).
-    We'll compute magnitude & phase in JAX, then convert to NumPy for plotting.
+    Plot the FFT spectrum using stem plots for magnitude and phase.
     """
-    # Compute in JAX
-    mag_jax = jnp.abs(fft_full)
-    # JAX has no builtin jnp.angle, so do an arctan2:
-    phase_jax = jnp.arctan2(jnp.imag(fft_full), jnp.real(fft_full))
+    # Compute magnitude and phase.
+    mag = np.asarray(jnp.abs(fft_full))
+    phase = np.asarray(jnp.arctan2(jnp.imag(fft_full), jnp.real(fft_full)))
 
-    # Materialize on CPU as NumPy arrays
-    mag = np.asarray(mag_jax)
-    phase = np.asarray(phase_jax)
-
-    # Plot with matplotlib
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    axes[0].plot(mag, marker="o")
+    markerline, stemlines, baseline = axes[0].stem(
+        mag, linefmt="b-", markerfmt="bo", basefmt="r-"
+    )
     axes[0].set_title("FFT Magnitude")
     axes[0].set_xlabel("Frequency index")
-    axes[0].set_ylabel("|FFT|")
+    axes[0].set_ylabel("Magnitude")
 
-    axes[1].plot(phase, marker="o")
+    markerline2, stemlines2, baseline2 = axes[1].stem(
+        phase, linefmt="g-", markerfmt="go", basefmt="r-"
+    )
     axes[1].set_title("FFT Phase")
     axes[1].set_xlabel("Frequency index")
     axes[1].set_ylabel("Phase (radians)")
@@ -156,32 +143,29 @@ def plot_fft_spectrum(fft_full: jnp.ndarray, show: bool = True):
 
 def visualize_circulant_kernel(fft_full: jnp.ndarray, show: bool = True):
     """
-    Similar approach: compute the circulant matrix in JAX, then convert to NumPy for plotting.
+    Visualize the time-domain circulant kernel using a stem plot, and display the full circulant matrix.
     """
     n = fft_full.shape[0]
-    # iFFT => first_col
-    first_col = jnp.fft.ifft(fft_full).real
-    # Build the circulant matrix in JAX
-    # row i is a roll of first_row, or column i is roll of first_col...
-    # We'll define the standard approach: stack of jnp.roll(...).
-    C = jnp.stack(
-        [jnp.roll(first_col, i) for i in range(n)], axis=1
-    )  # shape (n,n), depending on row vs col
-
-    # Convert to NumPy
+    time_kernel = jnp.fft.ifft(fft_full).real
+    C = jnp.stack([jnp.roll(time_kernel, i) for i in range(n)], axis=0)
     C_np = np.asarray(C)
-    time_domain = C_np[:, 0]  # first col (NumPy)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
-    ax1.plot(time_domain, marker="o")
-    ax1.set_title("Circulant Kernel (Time Domain)")
-    ax1.set_xlabel("Index")
-    ax1.set_ylabel("Amplitude")
+    # Stem plot for the time-domain kernel.
+    markerline, stemlines, baseline = axes[0].stem(
+        np.asarray(time_kernel), linefmt="b-", markerfmt="bo", basefmt="r-"
+    )
+    axes[0].set_title("Circulant Kernel (Time Domain)")
+    axes[0].set_xlabel("Index")
+    axes[0].set_ylabel("Amplitude")
 
-    im = ax2.imshow(C_np, cmap="viridis")
-    ax2.set_title("Circulant Matrix")
-    plt.colorbar(im, ax=ax2, fraction=0.046, pad=0.04)
+    # Image for the circulant matrix.
+    im = axes[1].imshow(C_np, cmap="viridis")
+    axes[1].set_title("Circulant Matrix")
+    axes[1].set_xlabel("Index")
+    axes[1].set_ylabel("Index")
+    plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
     plt.tight_layout()
     if show:
