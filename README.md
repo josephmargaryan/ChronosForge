@@ -108,6 +108,40 @@ Please see the notebooks in `examples/`
   </tr>
 </table>
 
+<table>
+  <tr>
+    <td align="center">
+      <img src="images/kernel.png" alt="Kernel" style="max-width: 100%;"><br>
+      <b>Kernel</b><br>
+      <small>Reconstructed circulant kernel</small>
+    </td>
+    <td align="center">
+      <img src="images/magnitude.png" alt="Magnitude" style="max-width: 100%;"><br>
+      <b>Magnitude</b><br>
+      <small>FFT magnitude visualization</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="images/kde.png" alt="KDE" style="max-width: 100%;"><br>
+      <b>KDE</b><br>
+      <small>Feature space with kernel density and mean predictions</small>
+    </td>
+    <td align="center">
+      <img src="images/posteriors.png" alt="Posteriors" style="max-width: 100%;"><br>
+      <b>Posteriors</b><br>
+      <small>95% confidence intervals with 30 random posterior samples</small>
+    </td>
+    <td align="center">
+      <img src="images/hdi.png" alt="HDI" style="max-width: 100%;"><br>
+      <b>HDI</b><br>
+      <small>High Density Interval plot</small>
+    </td>
+  </tr>
+</table>
+
+
+
 ### Pac Analysis Bound 
 To evaluate the generalization capabilities of Bayesian Neural Networks (BNNs), we compute the PAC-Bayesian bound:
 
