@@ -9,6 +9,7 @@ from quantbayes.stochax.utils import (
     visualize_block_circulant_kernels,
 )
 
+
 # Define a simple deterministic network that uses the block FFT layer.
 class MyBlockCirculantNet(eqx.Module):
     fft_layer: BlockFFTDirectPrior  # our block-circulant layer

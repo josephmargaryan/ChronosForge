@@ -10,6 +10,7 @@ from quantbayes.stochax.utils.fft_direct_prior import (
     visualize_circulant_kernel,
 )
 
+
 # Define a simple deterministic network that uses the FFT layer.
 class DeterministicNet(eqx.Module):
     fft_layer: FFTDirectPriorLinear

@@ -1,5 +1,7 @@
 """
-the magnitude-preserving unet proposed in https://arxiv.org/abs/2312.02696 by Karras et al"""
+the magnitude-preserving unet proposed in https://arxiv.org/abs/2312.02696 by Karras et al
+"""
+
 from functools import wraps
 from packaging import version
 from collections import namedtuple

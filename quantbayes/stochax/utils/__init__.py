@@ -1,34 +1,25 @@
-from .circulant_fft import CirculantLinear
-from .fft_direct_prior import (
-    FFTDirectPriorLinear,
-    plot_fft_spectrum,
-    visualize_circulant_kernel,
-    get_fft_full_for_given_params,
-)
-from .prob import bayesianize, prior_fn
-from .block_fft import BlockCirculantLinear
-from .efficient_block_circ import EfficientBlockCirculantLinear
-from .efficient_circulant import EfficientCirculantLinear
-from .block_circ_direct_prior import (
-    BlockFFTDirectPrior,
+from .bayesianize import bayesianize, prior_fn
+from .viz import (
     plot_block_fft_spectra,
     visualize_block_circulant_kernels,
     get_block_fft_full_for_given_params,
+    plot_fft_spectrum,
+    visualize_circulant_kernel,
+    get_fft_full_for_given_params,
+    collect_block_r_i,
+    plot_prior_posterior_frequency,
 )
 
 __all__ = [
-    "CirculantLinear",
     "bayesianize",
     "prior_fn",
-    "FFTDirectPriorLinear",
+    "plot_block_fft_spectra",
+    "visualize_block_circulant_kernels",
+    "get_block_fft_full_for_given_params",
     "plot_fft_spectrum",
     "visualize_circulant_kernel",
     "get_fft_full_for_given_params",
-    "BlockCirculantLinear",
-    "EfficientBlockCirculantLinear",
-    "EfficientCirculantLinear",
-    "BlockFFTDirectPrior",
-    "plot_block_fft_spectra",
-    "visualize_block_circulant_kernels",
-    "get_block_fft_full_for_given_params"
+    "compare_time_domain_truncation",
+    "collect_block_r_i",
+    "plot_prior_posterior_frequency",
 ]

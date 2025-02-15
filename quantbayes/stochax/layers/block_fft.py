@@ -164,7 +164,7 @@ class BlockCirculantLinear(eqx.Module):
 
 
 class MyBlockCirculantNet(eqx.Module):
-    bc_layer: BlockCirculantLinear  
+    bc_layer: BlockCirculantLinear
     final_layer: eqx.nn.Linear
 
     def __init__(self, in_features, hidden_dim, *, key):

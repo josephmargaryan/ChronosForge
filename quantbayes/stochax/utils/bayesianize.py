@@ -4,10 +4,9 @@ import equinox as eqx
 import numpyro
 import numpyro.distributions as dist
 
-__all__ = [
-    "bayesianize", 
-    "prior_fn"
-    ]
+__all__ = ["bayesianize", "prior_fn"]
+
+
 # ------------------------------------------------------------------------------
 # Helper: Bayesianize an Equinox module
 # ------------------------------------------------------------------------------

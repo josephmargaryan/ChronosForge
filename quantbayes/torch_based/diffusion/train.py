@@ -8,6 +8,7 @@ import logging
 from time import time
 from quantbayes.torch_based.diffusion import GaussianDiffusion, BetaSchedule
 
+
 # Simple EMA update function (for one GPU)
 def update_ema(ema_model, model, decay=0.9999):
     for ema_param, param in zip(ema_model.parameters(), model.parameters()):

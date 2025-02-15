@@ -15,6 +15,7 @@ from quantbayes.bnn.utils import BayesianAnalysis, plot_hdi
 from quantbayes import bnn, fake_data
 from sklearn.model_selection import train_test_split
 
+
 # --- Deterministic network using FFTDirectPriorLinear ---
 class MyDeterministicNet(eqx.Module):
     layer1: eqx.Module  # FFT-based layer

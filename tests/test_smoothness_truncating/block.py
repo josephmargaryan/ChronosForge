@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 
+
 class SmoothTruncBlockCirculantLayer:
     """
     NumPyro-based block-circulant layer. Each b x b block is parameterized
@@ -45,7 +46,7 @@ class SmoothTruncBlockCirculantLayer:
         freq_idx = jnp.arange(self.k_half)
         prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**self.alpha)
         # zero out freq >= K
-        mask = (freq_idx < self.K)
+        mask = freq_idx < self.K
         eff_scale = prior_std * mask  # shape (k_half,)
 
         # 2) Sample real/imag of shape (k_out, k_in, k_half)
@@ -66,33 +67,30 @@ class SmoothTruncBlockCirculantLayer:
 
         # 3) Reconstruct the full b-length array for each (i,j).
         def reconstruct_fft(r_ij, i_ij):
-            half_c = r_ij + 1j*i_ij
+            half_c = r_ij + 1j * i_ij
             if (self.b % 2 == 0) and (self.k_half > 1):
                 nyquist = half_c[-1].real[None]
-                block_fft = jnp.concatenate([
-                    half_c[:-1],
-                    nyquist,
-                    jnp.conjugate(half_c[1:-1])[::-1]
-                ])
+                block_fft = jnp.concatenate(
+                    [half_c[:-1], nyquist, jnp.conjugate(half_c[1:-1])[::-1]]
+                )
             else:
-                block_fft = jnp.concatenate([
-                    half_c,
-                    jnp.conjugate(half_c[1:])[::-1]
-                ])
+                block_fft = jnp.concatenate([half_c, jnp.conjugate(half_c[1:])[::-1]])
             return block_fft
 
         block_fft_full = jax.vmap(
             lambda Rrow, Irow: jax.vmap(reconstruct_fft)(Rrow, Irow),
             in_axes=(0, 0),
-        )(real_coeff, imag_coeff)  # shape (k_out, k_in, b)
+        )(
+            real_coeff, imag_coeff
+        )  # shape (k_out, k_in, b)
 
         # stop_gradient store for get_fourier_coeffs
         self._last_block_fft = jax.lax.stop_gradient(block_fft_full)
 
         # 4) Zero-pad X if needed, reshape
-        pad_len = self.k_in*self.b - d_in
+        pad_len = self.k_in * self.b - d_in
         if pad_len > 0:
-            X = jnp.pad(X, ((0,0),(0,pad_len)))
+            X = jnp.pad(X, ((0, 0), (0, pad_len)))
         X_blocks = X.reshape(bs, self.k_in, self.b)
 
         # 5) Multiply in time domain
@@ -100,7 +98,7 @@ class SmoothTruncBlockCirculantLayer:
             # sum over j => ifft( conj(block_fft_full[i,j]) * fft(X_blocks[:,j,:]) )
             def scan_j(carry, j):
                 w_ij = block_fft_full[i, j]  # shape (b,)
-                x_j = X_blocks[:, j, :]      # shape (bs, b)
+                x_j = X_blocks[:, j, :]  # shape (bs, b)
                 X_fft = jnp.fft.fft(x_j, axis=-1)
                 out_fft = X_fft * jnp.conjugate(w_ij)[None, :]
                 out_time = jnp.fft.ifft(out_fft, axis=-1).real
@@ -110,12 +108,16 @@ class SmoothTruncBlockCirculantLayer:
             out_time, _ = jax.lax.scan(scan_j, init, jnp.arange(self.k_in))
             return out_time
 
-        out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))  # (k_out, bs, b)
-        out_reshaped = jnp.transpose(out_blocks, (1,0,2)).reshape(bs, self.k_out*self.b)
+        out_blocks = jax.vmap(multiply_blockrow)(
+            jnp.arange(self.k_out)
+        )  # (k_out, bs, b)
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
+            bs, self.k_out * self.b
+        )
 
         # slice if needed
-        if self.k_out*self.b > self.out_features:
-            out_reshaped = out_reshaped[:, :self.out_features]
+        if self.k_out * self.b > self.out_features:
+            out_reshaped = out_reshaped[:, : self.out_features]
 
         if X.shape[0] == 1 and bs == 1:
             out_reshaped = out_reshaped[0]
@@ -131,9 +133,8 @@ class SmoothTruncBlockCirculantLayer:
         return self._last_block_fft
 
 
-
 if __name__ == "__main__":
-    import jax.random as jr 
+    import jax.random as jr
 
     from quantbayes import bnn
     from quantbayes.fake_data import generate_regression_data
@@ -146,18 +147,19 @@ if __name__ == "__main__":
     class MyNet(bnn.Module):
         def __init__(self):
             super().__init__(method="nuts", task_type="regression")
+
         def __call__(self, X, y=None):
             N, in_features = X.shape
-            X = SmoothTruncBlockCirculantLayer(in_features=in_features,
-                                                 out_features=16,
-                                                 block_size=4,
-                                                 alpha=1,
-                                                 K=3,
-                                                 name="tester")(X)
+            X = bnn.SmoothTruncBlockCirculantLayer(
+                in_features=in_features,
+                out_features=16,
+                block_size=4,
+                alpha=1,
+                K=3,
+                name="tester",
+            )(X)
             X = jax.nn.tanh(X)
-            X = bnn.Linear(in_features=16,
-                           out_features=1,
-                           name="out")(X)
+            X = bnn.Linear(in_features=16, out_features=1, name="out")(X)
             logits = X.squeeze()
             sigma = numpyro.sample("sigma", dist.Exponential(1.0))
             with numpyro.plate("data", N):

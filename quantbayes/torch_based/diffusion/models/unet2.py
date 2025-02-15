@@ -499,9 +499,11 @@ class Unet(Module):
                         attn_klass(
                             dim_in, dim_head=layer_attn_dim_head, heads=layer_attn_heads
                         ),
-                        Downsample(dim_in, dim_out)
-                        if not is_last
-                        else nn.Conv2d(dim_in, dim_out, 3, padding=1),
+                        (
+                            Downsample(dim_in, dim_out)
+                            if not is_last
+                            else nn.Conv2d(dim_in, dim_out, 3, padding=1)
+                        ),
                     ]
                 )
             )
@@ -535,9 +537,11 @@ class Unet(Module):
                             dim_head=layer_attn_dim_head,
                             heads=layer_attn_heads,
                         ),
-                        Upsample(dim_out, dim_in)
-                        if not is_last
-                        else nn.Conv2d(dim_out, dim_in, 3, padding=1),
+                        (
+                            Upsample(dim_out, dim_in)
+                            if not is_last
+                            else nn.Conv2d(dim_out, dim_in, 3, padding=1)
+                        ),
                     ]
                 )
             )

@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 
+
 class SmoothTruncCirculantLayer:
     """
     NumPyro-based circulant layer that places a frequency-dependent Gaussian prior
@@ -33,7 +34,7 @@ class SmoothTruncCirculantLayer:
         prior_std = 1.0 / jnp.sqrt(1.0 + freq_indices**self.alpha)
 
         # (2) Zero out freq >= K
-        mask = (freq_indices < self.K)
+        mask = freq_indices < self.K
         effective_scale = prior_std * mask  # shape (k_half,)
 
         # (3) Sample
@@ -86,10 +87,9 @@ class SmoothTruncCirculantLayer:
         return self._last_fft_full
 
 
-
 if __name__ == "__main__":
     import jax
-    import jax.random as jr 
+    import jax.random as jr
 
     from quantbayes import bnn
     from quantbayes.fake_data import generate_regression_data
@@ -102,16 +102,14 @@ if __name__ == "__main__":
     class MyNet(bnn.Module):
         def __init__(self):
             super().__init__(method="nuts", task_type="regression")
+
         def __call__(self, X, y=None):
             N, in_features = X.shape
-            X = SmoothTruncCirculantLayer(in_features=in_features,
-                                          alpha=1,
-                                          K=3,
-                                          name="tester")(X)
+            X = bnn.SmoothTruncCirculantLayer(
+                in_features=in_features, alpha=1, K=3, name="tester"
+            )(X)
             X = jax.nn.tanh(X)
-            X = bnn.Linear(in_features=in_features,
-                           out_features=1,
-                           name="out")(X)
+            X = bnn.Linear(in_features=in_features, out_features=1, name="out")(X)
             logits = X.squeeze()
             sigma = numpyro.sample("sigma", dist.Exponential(1.0))
             with numpyro.plate("data", N):
@@ -124,4 +122,3 @@ if __name__ == "__main__":
     model.visualize(X, y, posterior="likelihood")
     preds = model.predict(X, val_key, posterior="likelihood")
     plot_hdi(preds, X)
-

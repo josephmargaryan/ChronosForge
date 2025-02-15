@@ -29,6 +29,7 @@ class SegmentationModel:
         if self.loss_type == "dice":
             # Convert logits to probabilities for dice loss.
             probs = jax.nn.sigmoid(logits)
+
             # Your custom dice loss function.
             def dice_loss(pred, target, eps=1e-6):
                 pred = pred.reshape(-1)
