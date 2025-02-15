@@ -10,10 +10,18 @@ from quantbayes.stochax.utils import (
     plot_fft_spectrum,
     visualize_circulant_kernel
 )
-from quantbayes.stochax.layers import FFTDirectPriorLinear
+from quantbayes.stochax.layers import SmoothTruncEquinoxBlockCirculant, SmoothTruncEquinoxCirculant
 from quantbayes.bnn.utils import BayesianAnalysis, plot_hdi
+from quantbayes.stochax.utils import get_fft_full_for_given_params, collect_block_r_i
 from quantbayes import bnn, fake_data
 from sklearn.model_selection import train_test_split
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+from numpyro import handlers
+
+
 
 
 # --- Deterministic network using FFTDirectPriorLinear ---
@@ -23,7 +31,7 @@ class MyDeterministicNet(eqx.Module):
 
     def __init__(self, in_features, *, key):
         k1, k2 = jr.split(key, 2)
-        self.layer1 = FFTDirectPriorLinear(
+        self.layer1 = SmoothTruncEquinoxCirculant(
             in_features=in_features, key=k1, init_scale=1.0
         )
         self.layer2 = eqx.nn.Linear(in_features=in_features, out_features=1, key=k2)
@@ -95,12 +103,21 @@ bound.compute_pac_bayesian_bound(
     predictions=posterior_preds, y_true=y_test, prior_mean=0.0, prior_std=1.0
 )
 
-# --- Trigger a forward pass on the FFT layer ---
+preds = model.predict(X_test, val_key, posterior="logits")
+plot_hdi(preds, X_test)
+
+posterior_samples = model.get_samples
 _ = model.fft_layer(
     X_test[:1]
 )  # Ensure the FFT layer computes and stores its Fourier coefficients.
-fft_full = model.fft_layer.get_fourier_coeffs()  # Now this should be concrete.
+param_dict = {key: value[0] for key, value in posterior_samples.items()}
+
+# (2) Perform a forward pass with a valid RNG key to get a concrete fft_full.
+fft_full = get_fft_full_for_given_params(
+    model, X_test, param_dict, rng_key=jr.PRNGKey(0)
+)
+
+# (3) Plot the Fourier spectrum and circulant kernel.
 fig1 = plot_fft_spectrum(fft_full, show=True)
 fig2 = visualize_circulant_kernel(fft_full, show=True)
-preds = model.predict(X_test, val_key, posterior="logits")
-plot_hdi(preds, X_test)
+

@@ -3,6 +3,9 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 
+from quantbayes.stochax.layers import SmoothTruncEquinoxBlockCirculant
+from quantbayes.stochax.utils import plot_block_fft_spectra, visualize_block_circulant_kernels
+
 
 if __name__ == "__main__":
     import jax
@@ -16,7 +19,7 @@ if __name__ == "__main__":
             key1, key2 = jr.split(key, 2)
             self.fft_layer = SmoothTruncEquinoxBlockCirculant(
                 in_features=in_features,
-                out_features=64,
+                out_features=16,
                 block_size=4,
                 alpha=1,
                 K=3,
@@ -24,7 +27,7 @@ if __name__ == "__main__":
                 init_scale=1.0,
             )
             self.linear = eqx.nn.Linear(
-                in_features=64, out_features=out_features, key=key2
+                in_features=16, out_features=out_features, key=key2
             )
 
         def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -49,11 +52,14 @@ if __name__ == "__main__":
     output = net(x)
     print("Output of deterministic network (single input):", output)
 
-    """    
-    # Trigger the FFT layer's forward pass to update its stored coefficients.
+ 
+    # Trigger the FFT layer's forward pass (which does the block multiplication).
     _ = net.fft_layer(x)
 
-    # Retrieve and plot the Fourier coefficients.
-    fft_full = net.fft_layer.get_fourier_coeffs()
-    fig1 = plot_fft_spectrum(fft_full, show=True)
-    fig2 = visualize_circulant_kernel(fft_full, show=True)"""
+    # Retrieve the Fourier coefficients for each block.
+    fft_full_blocks = net.fft_layer.get_fourier_coeffs()
+
+    # Plot block FFT spectra (magnitude).
+    fig1 = plot_block_fft_spectra(fft_full_blocks, show=True)
+    # Visualize block circulant kernels.
+    fig2 = visualize_block_circulant_kernels(fft_full_blocks, show=True)

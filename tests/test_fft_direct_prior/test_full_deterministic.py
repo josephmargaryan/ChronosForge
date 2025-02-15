@@ -4,11 +4,11 @@ import jax.numpy as jnp
 import equinox as eqx
 
 # Import your FFT layer and visualization functions.
-from quantbayes.stochax.utils.fft_direct_prior import (
-    FFTDirectPriorLinear,
+from quantbayes.stochax.utils import (
     plot_fft_spectrum,
     visualize_circulant_kernel,
 )
+from quantbayes.stochax.layers import FFTDirectPriorLinear
 
 
 # Define a simple deterministic network that uses the FFT layer.

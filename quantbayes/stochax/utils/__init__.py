@@ -7,7 +7,8 @@ from .viz import (
     visualize_circulant_kernel,
     get_fft_full_for_given_params,
     collect_block_r_i,
-    plot_prior_posterior_frequency,
+    plot_prior_posterior_frequency, 
+    compare_time_domain_truncation
 )
 
 __all__ = [
