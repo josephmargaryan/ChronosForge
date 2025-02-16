@@ -10,7 +10,7 @@ class SmoothTruncEquinoxCirculant(eqx.Module):
     alpha: float = eqx.static_field()
     K: int = eqx.static_field()
     k_half: int = eqx.static_field()
-    
+
     # Instead of making prior_std a static field that changes,
     # we define it as a property computed from in_features, alpha, and K.
     # This keeps our design functional.
@@ -96,5 +96,3 @@ class SmoothTruncEquinoxCirculant(eqx.Module):
                 "Call the layer on some input first."
             )
         return self._last_fft_full
-
-

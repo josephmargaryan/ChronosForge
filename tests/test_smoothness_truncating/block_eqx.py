@@ -4,7 +4,10 @@ import jax.numpy as jnp
 import jax.random as jr
 
 from quantbayes.stochax.layers import SmoothTruncEquinoxBlockCirculant
-from quantbayes.stochax.utils import plot_block_fft_spectra, visualize_block_circulant_kernels
+from quantbayes.stochax.utils import (
+    plot_block_fft_spectra,
+    visualize_block_circulant_kernels,
+)
 
 
 if __name__ == "__main__":
@@ -52,7 +55,6 @@ if __name__ == "__main__":
     output = net(x)
     print("Output of deterministic network (single input):", output)
 
- 
     # Trigger the FFT layer's forward pass (which does the block multiplication).
     _ = net.fft_layer(x)
 

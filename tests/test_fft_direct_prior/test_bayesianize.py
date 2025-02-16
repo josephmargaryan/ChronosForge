@@ -8,7 +8,7 @@ from quantbayes.stochax.utils import (
     bayesianize,
     prior_fn,
     plot_fft_spectrum,
-    visualize_circulant_kernel
+    visualize_circulant_kernel,
 )
 from quantbayes.stochax.layers import FFTDirectPriorLinear
 from quantbayes.bnn.utils import BayesianAnalysis, plot_hdi

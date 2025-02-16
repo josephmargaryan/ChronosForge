@@ -4,14 +4,14 @@ import jax.random as jr
 
 from quantbayes.stochax.layers import SmoothTruncEquinoxCirculant
 from quantbayes.stochax.utils import (
-    plot_fft_spectrum, 
-    visualize_circulant_kernel, 
+    plot_fft_spectrum,
+    visualize_circulant_kernel,
     plot_prior_posterior_frequency,
-    compare_time_domain_truncation
+    compare_time_domain_truncation,
 )
 
 if __name__ == "__main__":
-    import jax 
+    import jax
 
     # Define a simple deterministic network that uses the FFT layer.
     class DeterministicNet(eqx.Module):
@@ -24,7 +24,7 @@ if __name__ == "__main__":
                 in_features=in_features,
                 alpha=0.6,
                 K=3,
-                key=key1, 
+                key=key1,
                 init_scale=1.0,
             )
             self.linear = eqx.nn.Linear(
@@ -38,7 +38,6 @@ if __name__ == "__main__":
             x = jax.nn.tanh(x)
             # Then apply a simple linear layer.
             return self.linear(x)
-
 
     key = jr.PRNGKey(42)
     in_features = 8
@@ -54,7 +53,6 @@ if __name__ == "__main__":
     output = net(x)
     print("Output of deterministic network (single input):", output)
 
-
     # Trigger the FFT layer's forward pass to update its stored coefficients.
     _ = net.fft_layer(x)
 
@@ -62,7 +60,4 @@ if __name__ == "__main__":
     fft_full = net.fft_layer.get_fourier_coeffs()
     fig1 = plot_fft_spectrum(fft_full, show=True)
     fig2 = visualize_circulant_kernel(fft_full, show=True)
-    fig3 = compare_time_domain_truncation(fft_full=fft_full,
-                                          K=3,
-                                          title="time comain"
-                                          )
+    fig3 = compare_time_domain_truncation(fft_full=fft_full, K=3, title="time comain")

@@ -6,7 +6,7 @@ import numpyro.distributions as dist
 from quantbayes.stochax.utils import (
     plot_block_fft_spectra,
     visualize_block_circulant_kernels,
-    get_block_fft_full_for_given_params
+    get_block_fft_full_for_given_params,
 )
 
 
@@ -54,8 +54,8 @@ if __name__ == "__main__":
 
     posterior_samples = model.get_samples
     param_dict = {
-    key: value[0] for key, value in posterior_samples.items() if key != "logits"
-}
+        key: value[0] for key, value in posterior_samples.items() if key != "logits"
+    }
     # (2) Perform a forward pass with a valid RNG key to get a concrete fft_full.
     fft_full = get_block_fft_full_for_given_params(
         model,

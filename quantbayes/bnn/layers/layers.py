@@ -633,7 +633,6 @@ class SmoothTruncCirculantLayer:
     and truncates high frequencies (freq >= K).
     """
 
-
     def __init__(
         self,
         in_features: int,
@@ -663,7 +662,6 @@ class SmoothTruncCirculantLayer:
         # (2) Determine active indices statically: the first K indices are active.
         active_indices = jnp.arange(self.K)  # shape (K,)
         n_active = self.K
-
 
         # (3) Sample only for active frequencies.
         # For inactive frequencies, we'll fill with zeros.
@@ -776,14 +774,14 @@ class SmoothTruncBlockCirculantLayer:
         active_real = numpyro.sample(
             f"{self.name}_real",
             dist.Normal(0.0, prior_std[active_indices])
-                .expand([self.k_out, self.k_in, n_active])
-                .to_event(3),
+            .expand([self.k_out, self.k_in, n_active])
+            .to_event(3),
         )
         active_imag = numpyro.sample(
             f"{self.name}_imag",
             dist.Normal(0.0, prior_std[active_indices])
-                .expand([self.k_out, self.k_in, n_active])
-                .to_event(3),
+            .expand([self.k_out, self.k_in, n_active])
+            .to_event(3),
         )
 
         # Create full arrays for real and imaginary parts (shape: (k_out, k_in, k_half))
@@ -813,7 +811,9 @@ class SmoothTruncBlockCirculantLayer:
         block_fft_full = jax.vmap(
             lambda Rrow, Irow: jax.vmap(reconstruct_fft)(Rrow, Irow),
             in_axes=(0, 0),
-        )(real_coeff, imag_coeff)  # shape (k_out, k_in, b)
+        )(
+            real_coeff, imag_coeff
+        )  # shape (k_out, k_in, b)
 
         # stop_gradient store for get_fourier_coeffs
         self._last_block_fft = jax.lax.stop_gradient(block_fft_full)
@@ -839,7 +839,9 @@ class SmoothTruncBlockCirculantLayer:
             out_time, _ = jax.lax.scan(scan_j, init, jnp.arange(self.k_in))
             return out_time
 
-        out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))  # (k_out, bs, b)
+        out_blocks = jax.vmap(multiply_blockrow)(
+            jnp.arange(self.k_out)
+        )  # (k_out, bs, b)
         out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
             bs, self.k_out * self.b
         )
@@ -860,7 +862,6 @@ class SmoothTruncBlockCirculantLayer:
         if self._last_block_fft is None:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
-
 
 
 class ParticleLinear:

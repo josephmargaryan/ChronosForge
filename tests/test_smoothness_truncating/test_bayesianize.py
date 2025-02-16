@@ -8,9 +8,12 @@ from quantbayes.stochax.utils import (
     bayesianize,
     prior_fn,
     plot_fft_spectrum,
-    visualize_circulant_kernel
+    visualize_circulant_kernel,
 )
-from quantbayes.stochax.layers import SmoothTruncEquinoxBlockCirculant, SmoothTruncEquinoxCirculant
+from quantbayes.stochax.layers import (
+    SmoothTruncEquinoxBlockCirculant,
+    SmoothTruncEquinoxCirculant,
+)
 from quantbayes.bnn.utils import BayesianAnalysis, plot_hdi
 from quantbayes.stochax.utils import get_fft_full_for_given_params, collect_block_r_i
 from quantbayes import bnn, fake_data
@@ -20,8 +23,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from numpyro import handlers
-
-
 
 
 # --- Deterministic network using FFTDirectPriorLinear ---
@@ -120,4 +121,3 @@ fft_full = get_fft_full_for_given_params(
 # (3) Plot the Fourier spectrum and circulant kernel.
 fig1 = plot_fft_spectrum(fft_full, show=True)
 fig2 = visualize_circulant_kernel(fft_full, show=True)
-

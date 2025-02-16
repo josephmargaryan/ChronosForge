@@ -91,6 +91,8 @@ fig2 = visualize_circulant_kernel(fft_full, show=True)
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+
 def plot_fft_spectrum_with_uncertainty(fft_samples, show=True):
     """
     fft_samples: shape (num_samples, n)
@@ -100,54 +102,63 @@ def plot_fft_spectrum_with_uncertainty(fft_samples, show=True):
     # Compute statistics across samples
     mag_samples = np.abs(fft_samples)  # shape (num_samples, n)
     phase_samples = np.angle(fft_samples)  # shape (num_samples, n)
-    
+
     mag_mean = mag_samples.mean(axis=0)
     phase_mean = phase_samples.mean(axis=0)
-    
+
     # Compute, for example, 95% quantiles
     mag_lower = np.percentile(mag_samples, 2.5, axis=0)
     mag_upper = np.percentile(mag_samples, 97.5, axis=0)
     phase_lower = np.percentile(phase_samples, 2.5, axis=0)
     phase_upper = np.percentile(phase_samples, 97.5, axis=0)
-    
+
     freq_idx = np.arange(fft_samples.shape[1])
-    
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    axes[0].plot(freq_idx, mag_mean, 'b-', label='Mean Magnitude')
-    axes[0].fill_between(freq_idx, mag_lower, mag_upper, color='blue', alpha=0.3, label='95% CI')
+    axes[0].plot(freq_idx, mag_mean, "b-", label="Mean Magnitude")
+    axes[0].fill_between(
+        freq_idx, mag_lower, mag_upper, color="blue", alpha=0.3, label="95% CI"
+    )
     axes[0].set_title("FFT Magnitude with Uncertainty")
     axes[0].set_xlabel("Frequency index")
     axes[0].set_ylabel("Magnitude")
     axes[0].legend()
-    
-    axes[1].plot(freq_idx, phase_mean, 'g-', label='Mean Phase')
-    axes[1].fill_between(freq_idx, phase_lower, phase_upper, color='green', alpha=0.3, label='95% CI')
+
+    axes[1].plot(freq_idx, phase_mean, "g-", label="Mean Phase")
+    axes[1].fill_between(
+        freq_idx, phase_lower, phase_upper, color="green", alpha=0.3, label="95% CI"
+    )
     axes[1].set_title("FFT Phase with Uncertainty")
     axes[1].set_xlabel("Frequency index")
     axes[1].set_ylabel("Phase (radians)")
     axes[1].legend()
-    
+
     plt.tight_layout()
     if show:
         plt.show()
     return fig
 
-def visualize_circulant_kernel_with_uncertainty(fft_samples: np.ndarray, show: bool = True):
+
+def visualize_circulant_kernel_with_uncertainty(
+    fft_samples: np.ndarray, show: bool = True
+):
     """
     Visualize the uncertainty in the time-domain circulant kernel.
-    
+
     Parameters:
         fft_samples: np.ndarray of shape (num_samples, n)
             Array of FFT coefficients from multiple posterior samples.
         show: bool, if True, calls plt.show().
-    
+
     Returns:
         fig: the matplotlib figure.
     """
     num_samples, n = fft_samples.shape
 
     # Compute the time-domain kernel for each sample using the inverse FFT.
-    time_kernels = np.array([np.fft.ifft(fft_sample).real for fft_sample in fft_samples])
+    time_kernels = np.array(
+        [np.fft.ifft(fft_sample).real for fft_sample in fft_samples]
+    )
     # time_kernels has shape (num_samples, n)
 
     # Compute summary statistics for the time-domain kernel at each time index.
@@ -160,26 +171,33 @@ def visualize_circulant_kernel_with_uncertainty(fft_samples: np.ndarray, show: b
     C_mean = np.stack([np.roll(kernel_mean, i) for i in range(n)], axis=0)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    
+
     # Plot the mean kernel with error bars for uncertainty.
-    axes[0].errorbar(np.arange(n), kernel_mean, 
-                     yerr=[kernel_mean - kernel_lower, kernel_upper - kernel_mean],
-                     fmt='o', color='b', ecolor='lightgray', capsize=3)
+    axes[0].errorbar(
+        np.arange(n),
+        kernel_mean,
+        yerr=[kernel_mean - kernel_lower, kernel_upper - kernel_mean],
+        fmt="o",
+        color="b",
+        ecolor="lightgray",
+        capsize=3,
+    )
     axes[0].set_title("Circulant Kernel (Time Domain) with Uncertainty")
     axes[0].set_xlabel("Index")
     axes[0].set_ylabel("Amplitude")
-    
+
     # For the circulant matrix, show the mean matrix.
     im = axes[1].imshow(C_mean, cmap="viridis")
     axes[1].set_title("Mean Circulant Matrix")
     axes[1].set_xlabel("Index")
     axes[1].set_ylabel("Index")
     plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
-    
+
     plt.tight_layout()
     if show:
         plt.show()
     return fig
+
 
 fft_list = []
 
@@ -187,7 +205,7 @@ fft_list = []
 for i in range(100):
     # Build a parameter dictionary using the i-th sample from each posterior parameter.
     sample_param_dict = {key: value[i] for key, value in posterior_samples.items()}
-    
+
     # Get the fft_full for this sample.
     fft_full = get_fft_full_for_given_params(
         model, X_test, sample_param_dict, rng_key=jr.PRNGKey(i)

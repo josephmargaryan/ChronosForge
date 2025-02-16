@@ -101,7 +101,11 @@ class SmoothTruncEquinoxBlockCirculant(eqx.Module):
             if (b % 2 == 0) and (self.k_half > 1):
                 nyquist = half_complex[-1].real[None]
                 block_fft = jnp.concatenate(
-                    [half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]]
+                    [
+                        half_complex[:-1],
+                        nyquist,
+                        jnp.conjugate(half_complex[1:-1])[::-1],
+                    ]
                 )
             else:
                 block_fft = jnp.concatenate(
@@ -123,7 +127,7 @@ class SmoothTruncEquinoxBlockCirculant(eqx.Module):
             # Sum over the input blocks j.
             def sum_over_j(carry, j):
                 fft_block = block_fft_full[i, j]  # shape (block_size,)
-                x_j = x_blocks[:, j, :]           # shape (bs, block_size)
+                x_j = x_blocks[:, j, :]  # shape (bs, block_size)
                 X_fft = jnp.fft.fft(x_j, axis=-1)
                 # Note the conjugation on the weight block.
                 out_fft = X_fft * jnp.conjugate(fft_block)[None, :]
@@ -134,7 +138,9 @@ class SmoothTruncEquinoxBlockCirculant(eqx.Module):
             out_time, _ = jax.lax.scan(sum_over_j, init, jnp.arange(self.k_in))
             return out_time
 
-        out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))  # shape (k_out, bs, block_size)
+        out_blocks = jax.vmap(multiply_blockrow)(
+            jnp.arange(self.k_out)
+        )  # shape (k_out, bs, block_size)
         out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
             bs, self.k_out * self.block_size
         )

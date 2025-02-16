@@ -92,8 +92,10 @@ fig1 = plot_block_fft_spectra(fft_full, show=True)
 fig2 = visualize_block_circulant_kernels(fft_full, show=True)
 
 
-import numpy as np 
+import numpy as np
 import matplotlib.pyplot as plt
+
+
 def plot_block_fft_spectra_with_phase(fft_full_blocks: jnp.ndarray, show: bool = True):
     """
     Plot both the magnitude and phase for each block weight matrix using subplots.
@@ -102,15 +104,15 @@ def plot_block_fft_spectra_with_phase(fft_full_blocks: jnp.ndarray, show: bool =
     fft_blocks = np.asarray(fft_full_blocks)
     k_out, k_in, b = fft_blocks.shape
     total = k_out * k_in
-    
+
     # Create a grid for each block where we have two subplots (mag and phase)
     nrows = int(np.ceil(np.sqrt(total)))
     ncols = int(np.ceil(total / nrows))
-    
+
     fig, axes = plt.subplots(nrows * 2, ncols, figsize=(4 * ncols, 3 * nrows))
     axes = np.array(axes).reshape(nrows, 2, ncols)  # shape (nrows, 2, ncols)
     axes = axes.reshape(-1, ncols)  # for easier iteration over rows
-    
+
     idx = 0
     for i in range(nrows):
         for j in range(ncols):
@@ -121,26 +123,26 @@ def plot_block_fft_spectra_with_phase(fft_full_blocks: jnp.ndarray, show: bool =
                 fft_block = fft_blocks[block_row, block_col]
                 mag = np.abs(fft_block)
                 phase = np.angle(fft_block)
-                
+
                 # Magnitude subplot (top row for this block)
-                ax_mag = axes[i*2, j]
+                ax_mag = axes[i * 2, j]
                 ax_mag.stem(mag, linefmt="b-", markerfmt="bo", basefmt="r-")
                 ax_mag.set_title(f"Block ({block_row},{block_col}) Mag")
                 ax_mag.set_xlabel("Freq index")
                 ax_mag.set_ylabel("Magnitude")
-                
+
                 # Phase subplot (bottom row for this block)
-                ax_phase = axes[i*2 + 1, j]
+                ax_phase = axes[i * 2 + 1, j]
                 ax_phase.stem(phase, linefmt="g-", markerfmt="go", basefmt="r-")
                 ax_phase.set_title(f"Block ({block_row},{block_col}) Phase")
                 ax_phase.set_xlabel("Freq index")
                 ax_phase.set_ylabel("Phase (rad)")
-                
+
                 idx += 1
             else:
                 # Hide unused subplots
                 for k in range(2):
-                    axes[i*2 + k, j].set_visible(False)
+                    axes[i * 2 + k, j].set_visible(False)
 
     plt.tight_layout()
     if show:
@@ -148,14 +150,16 @@ def plot_block_fft_spectra_with_phase(fft_full_blocks: jnp.ndarray, show: bool =
     return fig
 
 
-def plot_block_fft_spectra_with_uncertainty(fft_samples_blocks: np.ndarray, show: bool = True):
+def plot_block_fft_spectra_with_uncertainty(
+    fft_samples_blocks: np.ndarray, show: bool = True
+):
     """
     Plot the mean and 95% credible intervals for the magnitude and phase of each block's FFT.
-    
+
     Parameters:
       fft_samples_blocks: np.ndarray of shape (num_samples, k_out, k_in, block_size)
       show: whether to call plt.show() at the end.
-      
+
     Returns:
       A matplotlib figure.
     """
@@ -164,99 +168,117 @@ def plot_block_fft_spectra_with_uncertainty(fft_samples_blocks: np.ndarray, show
 
     # Prepare grids to store statistics for each block.
     # We'll create separate figures for magnitude and phase.
-    fig_mag, axes_mag = plt.subplots(int(np.ceil(np.sqrt(total))), int(np.ceil(total / np.ceil(np.sqrt(total)))),
-                                     figsize=(4 * int(np.ceil(np.sqrt(total))), 3 * int(np.ceil(np.sqrt(total)))))
-    fig_phase, axes_phase = plt.subplots(int(np.ceil(np.sqrt(total))), int(np.ceil(total / np.ceil(np.sqrt(total)))),
-                                         figsize=(4 * int(np.ceil(np.sqrt(total))), 3 * int(np.ceil(np.sqrt(total)))))
+    fig_mag, axes_mag = plt.subplots(
+        int(np.ceil(np.sqrt(total))),
+        int(np.ceil(total / np.ceil(np.sqrt(total)))),
+        figsize=(4 * int(np.ceil(np.sqrt(total))), 3 * int(np.ceil(np.sqrt(total)))),
+    )
+    fig_phase, axes_phase = plt.subplots(
+        int(np.ceil(np.sqrt(total))),
+        int(np.ceil(total / np.ceil(np.sqrt(total)))),
+        figsize=(4 * int(np.ceil(np.sqrt(total))), 3 * int(np.ceil(np.sqrt(total)))),
+    )
 
     axes_mag = np.array(axes_mag).flatten()
     axes_phase = np.array(axes_phase).flatten()
-    
+
     for idx in range(total):
         # Determine block indices.
         i = idx // k_in
         j = idx % k_in
-        
+
         # Extract all samples for block (i,j) => shape (num_samples, b)
         block_samples = fft_samples_blocks[:, i, j, :]  # complex values
-        
+
         # Compute magnitude and phase samples: shape (num_samples, b)
         mag_samples = np.abs(block_samples)
         phase_samples = np.angle(block_samples)
-        
+
         # Compute mean and 95% CI for magnitude.
         mag_mean = mag_samples.mean(axis=0)
         mag_lower = np.percentile(mag_samples, 2.5, axis=0)
         mag_upper = np.percentile(mag_samples, 97.5, axis=0)
-        
+
         # Compute mean and 95% CI for phase.
         phase_mean = phase_samples.mean(axis=0)
         phase_lower = np.percentile(phase_samples, 2.5, axis=0)
         phase_upper = np.percentile(phase_samples, 97.5, axis=0)
-        
+
         freq_idx = np.arange(b)
-        
+
         # Plot magnitude uncertainty.
         ax_mag = axes_mag[idx]
-        ax_mag.plot(freq_idx, mag_mean, 'b-', label='Mean')
-        ax_mag.fill_between(freq_idx, mag_lower, mag_upper, color='blue', alpha=0.3, label='95% CI')
+        ax_mag.plot(freq_idx, mag_mean, "b-", label="Mean")
+        ax_mag.fill_between(
+            freq_idx, mag_lower, mag_upper, color="blue", alpha=0.3, label="95% CI"
+        )
         ax_mag.set_title(f"Block ({i},{j}) Mag")
         ax_mag.set_xlabel("Freq index")
         ax_mag.set_ylabel("Magnitude")
         ax_mag.legend(fontsize=8)
-        
+
         # Plot phase uncertainty.
         ax_phase = axes_phase[idx]
-        ax_phase.plot(freq_idx, phase_mean, 'g-', label='Mean')
-        ax_phase.fill_between(freq_idx, phase_lower, phase_upper, color='green', alpha=0.3, label='95% CI')
+        ax_phase.plot(freq_idx, phase_mean, "g-", label="Mean")
+        ax_phase.fill_between(
+            freq_idx, phase_lower, phase_upper, color="green", alpha=0.3, label="95% CI"
+        )
         ax_phase.set_title(f"Block ({i},{j}) Phase")
         ax_phase.set_xlabel("Freq index")
         ax_phase.set_ylabel("Phase (rad)")
         ax_phase.legend(fontsize=8)
-    
+
     # Hide any extra subplots.
     for ax in axes_mag[total:]:
         ax.set_visible(False)
     for ax in axes_phase[total:]:
         ax.set_visible(False)
-    
+
     fig_mag.tight_layout()
     fig_phase.tight_layout()
     if show:
         plt.show()
     return fig_mag, fig_phase
 
-def visualize_block_circulant_kernels_with_uncertainty(fft_samples_blocks: np.ndarray, show: bool = True):
+
+def visualize_block_circulant_kernels_with_uncertainty(
+    fft_samples_blocks: np.ndarray, show: bool = True
+):
     """
     Visualize the uncertainty in the time-domain circulant kernels for each block.
-    
+
     Parameters:
       fft_samples_blocks: np.ndarray of shape (num_samples, k_out, k_in, block_size)
       show: whether to call plt.show() at the end.
-      
+
     Returns:
       A matplotlib figure.
     """
     num_samples, k_out, k_in, b = fft_samples_blocks.shape
     total = k_out * k_in
-    
+
     # For each block, compute the time-domain kernels from each FFT sample.
     # We'll get an array of shape (num_samples, b) per block.
     # Then compute the mean and 95% CI across samples.
-    fig, axes = plt.subplots(int(np.ceil(np.sqrt(total))), int(np.ceil(total / np.ceil(np.sqrt(total)))),
-                             figsize=(4 * int(np.ceil(np.sqrt(total))), 3 * int(np.ceil(np.sqrt(total)))))
+    fig, axes = plt.subplots(
+        int(np.ceil(np.sqrt(total))),
+        int(np.ceil(total / np.ceil(np.sqrt(total)))),
+        figsize=(4 * int(np.ceil(np.sqrt(total))), 3 * int(np.ceil(np.sqrt(total)))),
+    )
     axes = np.array(axes).flatten()
-    
+
     for idx in range(total):
         i = idx // k_in
         j = idx % k_in
-        
+
         # For block (i,j), get FFT samples.
         block_fft_samples = fft_samples_blocks[:, i, j, :]  # shape (num_samples, b)
         # Compute time-domain kernels via IFFT (per sample)
-        time_kernels = np.array([np.fft.ifft(sample).real for sample in block_fft_samples])
+        time_kernels = np.array(
+            [np.fft.ifft(sample).real for sample in block_fft_samples]
+        )
         # time_kernels: shape (num_samples, b)
-        
+
         # Compute mean and 95% CI for the kernel.
         # Compute mean and 95% CI for the kernel.
         kernel_mean = time_kernels.mean(axis=0)
@@ -269,22 +291,29 @@ def visualize_block_circulant_kernels_with_uncertainty(fft_samples_blocks: np.nd
 
         # Plot error bars for the kernel using the clipped error values directly:
         ax = axes[idx]
-        ax.errorbar(np.arange(b), kernel_mean,
-                    yerr=[lower_err, upper_err],
-                    fmt='o', color='b', ecolor='lightgray', capsize=3)
+        ax.errorbar(
+            np.arange(b),
+            kernel_mean,
+            yerr=[lower_err, upper_err],
+            fmt="o",
+            color="b",
+            ecolor="lightgray",
+            capsize=3,
+        )
 
         ax.set_title(f"Block ({i},{j}) Kernel")
         ax.set_xlabel("Time index")
         ax.set_ylabel("Amplitude")
-    
+
     # Hide any extra subplots.
     for ax in axes[total:]:
         ax.set_visible(False)
-    
+
     plt.tight_layout()
     if show:
         plt.show()
     return fig
+
 
 plot_block_fft_spectra_with_phase(fft_full)
 
@@ -297,7 +326,7 @@ for i in range(n_samples):
     sample_param_dict = {
         key: value[i] for key, value in posterior_samples.items() if key != "logits"
     }
-    
+
     # Get the fft_full for this sample.
     fft_full = get_block_fft_full_for_given_params(
         model, X_test, sample_param_dict, rng_key=jr.PRNGKey(i)

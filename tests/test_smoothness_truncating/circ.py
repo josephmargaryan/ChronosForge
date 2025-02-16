@@ -2,7 +2,12 @@ import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 
-from quantbayes.stochax.utils import CirculantVisualizer, plot_fft_spectrum, visualize_circulant_kernel, get_fft_full_for_given_params  
+from quantbayes.stochax.utils import (
+    CirculantVisualizer,
+    plot_fft_spectrum,
+    visualize_circulant_kernel,
+    get_fft_full_for_given_params,
+)
 
 
 if __name__ == "__main__":
@@ -45,8 +50,6 @@ if __name__ == "__main__":
 
     posterior_samples = model.get_samples
 
- 
-
     """    
     visualizer = CirculantVisualizer(
     model, 
@@ -65,7 +68,6 @@ if __name__ == "__main__":
     # (B) Visualize the full posterior uncertainty.
     figs = visualizer.visualize_posterior('fft_layer', n_draws=None)"""
 
-
     """    
     # (2) Perform a forward pass with a valid RNG key to get a concrete fft_full.
        
@@ -78,7 +80,6 @@ if __name__ == "__main__":
     fig1 = plot_fft_spectrum(fft_full, show=True)
     fig2 = visualize_circulant_kernel(fft_full, show=True)"""
 
-
     import numpy as np
     import matplotlib.pyplot as plt
     import jax
@@ -86,11 +87,12 @@ if __name__ == "__main__":
     class CirculantVisualizer:
         """
         Visualizer for a single circulant (FFT-based) layer.
-        
+
         This class consolidates functions for plotting the FFT spectrum (magnitude
         and phase) as well as visualizing the time-domain circulant kernel.
         It gracefully handles conversion from JAX tracers/arrays to NumPy arrays.
         """
+
         def __init__(self, fft_full):
             # Convert to a numpy array if necessary.
             self.fft_full = self._to_numpy(fft_full)
@@ -159,7 +161,7 @@ if __name__ == "__main__":
         def plot_spectrum_with_uncertainty(self, fft_samples, show=True):
             """
             Plot the FFT spectrum with uncertainty estimates (e.g. 95% credible intervals).
-            
+
             Parameters:
                 fft_samples: array of shape (num_samples, n)
             """
@@ -178,15 +180,24 @@ if __name__ == "__main__":
 
             freq_idx = np.arange(fft_samples_np.shape[1])
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            axes[0].plot(freq_idx, mag_mean, 'b-', label='Mean Magnitude')
-            axes[0].fill_between(freq_idx, mag_lower, mag_upper, color='blue', alpha=0.3, label='95% CI')
+            axes[0].plot(freq_idx, mag_mean, "b-", label="Mean Magnitude")
+            axes[0].fill_between(
+                freq_idx, mag_lower, mag_upper, color="blue", alpha=0.3, label="95% CI"
+            )
             axes[0].set_title("FFT Magnitude with Uncertainty")
             axes[0].set_xlabel("Frequency index")
             axes[0].set_ylabel("Magnitude")
             axes[0].legend()
 
-            axes[1].plot(freq_idx, phase_mean, 'g-', label='Mean Phase')
-            axes[1].fill_between(freq_idx, phase_lower, phase_upper, color='green', alpha=0.3, label='95% CI')
+            axes[1].plot(freq_idx, phase_mean, "g-", label="Mean Phase")
+            axes[1].fill_between(
+                freq_idx,
+                phase_lower,
+                phase_upper,
+                color="green",
+                alpha=0.3,
+                label="95% CI",
+            )
             axes[1].set_title("FFT Phase with Uncertainty")
             axes[1].set_xlabel("Frequency index")
             axes[1].set_ylabel("Phase (radians)")
@@ -200,7 +211,7 @@ if __name__ == "__main__":
         def visualize_kernel_with_uncertainty(self, fft_samples, show=True):
             """
             Visualize the uncertainty in the time-domain circulant kernel.
-            
+
             Parameters:
                 fft_samples: array of shape (num_samples, n)
             """
@@ -208,7 +219,9 @@ if __name__ == "__main__":
             num_samples, n = fft_samples_np.shape
 
             # Compute time-domain kernels for all samples.
-            time_kernels = np.array([np.fft.ifft(fft_sample).real for fft_sample in fft_samples_np])
+            time_kernels = np.array(
+                [np.fft.ifft(fft_sample).real for fft_sample in fft_samples_np]
+            )
             kernel_mean = time_kernels.mean(axis=0)
             kernel_lower = np.percentile(time_kernels, 2.5, axis=0)
             kernel_upper = np.percentile(time_kernels, 97.5, axis=0)
@@ -217,9 +230,15 @@ if __name__ == "__main__":
             C_mean = np.stack([np.roll(kernel_mean, i) for i in range(n)], axis=0)
 
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            axes[0].errorbar(np.arange(n), kernel_mean, 
-                            yerr=[kernel_mean - kernel_lower, kernel_upper - kernel_mean],
-                            fmt='o', color='b', ecolor='lightgray', capsize=3)
+            axes[0].errorbar(
+                np.arange(n),
+                kernel_mean,
+                yerr=[kernel_mean - kernel_lower, kernel_upper - kernel_mean],
+                fmt="o",
+                color="b",
+                ecolor="lightgray",
+                capsize=3,
+            )
             axes[0].set_title("Circulant Kernel (Time Domain) with Uncertainty")
             axes[0].set_xlabel("Index")
             axes[0].set_ylabel("Amplitude")
@@ -235,15 +254,15 @@ if __name__ == "__main__":
                 plt.show()
             return fig
 
-
     class BlockCirculantVisualizer:
         """
         Visualizer for block-circulant layers.
-        
+
         This class consolidates functions for visualizing the FFT spectra of each
         block (using stem plots) and the time-domain circulant kernels for each block.
         It handles conversion from JAX tracers gracefully.
         """
+
         def __init__(self, fft_full_blocks):
             """
             Parameters:
@@ -279,7 +298,7 @@ if __name__ == "__main__":
                 ax.set_title(f"Block ({i},{j}) FFT Mag")
                 ax.set_xlabel("Freq index")
                 ax.set_ylabel("Magnitude")
-            
+
             # Hide any extra subplots.
             for ax in axes[total:]:
                 ax.set_visible(False)
@@ -340,7 +359,9 @@ if __name__ == "__main__":
             for idx in range(total):
                 i = idx // k_in
                 j = idx % k_in
-                block_samples = fft_samples[:, i, j, :]  # shape (num_samples, block_size)
+                block_samples = fft_samples[
+                    :, i, j, :
+                ]  # shape (num_samples, block_size)
                 mag_samples = np.abs(block_samples)
                 phase_samples = np.angle(block_samples)
                 mag_mean = mag_samples.mean(axis=0)
@@ -352,8 +373,15 @@ if __name__ == "__main__":
                 freq_idx = np.arange(b)
 
                 ax = axes[idx]
-                ax.plot(freq_idx, mag_mean, 'b-', label='Mean Mag')
-                ax.fill_between(freq_idx, mag_lower, mag_upper, color='blue', alpha=0.3, label='95% CI')
+                ax.plot(freq_idx, mag_mean, "b-", label="Mean Mag")
+                ax.fill_between(
+                    freq_idx,
+                    mag_lower,
+                    mag_upper,
+                    color="blue",
+                    alpha=0.3,
+                    label="95% CI",
+                )
                 ax.set_title(f"Block ({i},{j}) FFT Mag")
                 ax.set_xlabel("Freq index")
                 ax.set_ylabel("Magnitude")
@@ -380,5 +408,3 @@ if __name__ == "__main__":
     fig3 = block_visualizer.plot_block_spectra()
     fig4 = block_visualizer.visualize_block_kernels()
     """
-
-        
