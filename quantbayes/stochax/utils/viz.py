@@ -468,6 +468,54 @@ def visualize_block_circulant_kernels_with_uncertainty(fft_samples_blocks: np.nd
         plt.show()
     return fig
 
+def visualize_block_circulant_matrices_with_uncertainty(fft_samples_blocks: np.ndarray, show: bool = True):
+    """
+    Visualize the uncertainty in the circulant matrices for each block.
+    For each block, the time-domain kernel is computed via IFFT from the posterior
+    samples, and the mean circulant matrix is obtained by rolling the mean kernel.
+    
+    Parameters:
+        fft_samples_blocks: np.ndarray of shape (num_samples, k_out, k_in, block_size)
+            Array of FFT coefficients from multiple posterior samples.
+        show: bool, if True calls plt.show() at the end.
+        
+    Returns:
+        A matplotlib figure showing the circulant matrices for each block.
+    """
+    num_samples, k_out, k_in, b = fft_samples_blocks.shape
+    total = k_out * k_in
+    nrows = int(np.ceil(np.sqrt(total)))
+    ncols = int(np.ceil(total / nrows))
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows))
+    axes = np.array(axes).flatten()
+    
+    for idx in range(total):
+        i = idx // k_in
+        j = idx % k_in
+        
+        # For block (i,j), compute the time-domain kernel for each sample.
+        block_fft_samples = fft_samples_blocks[:, i, j, :]  # shape (num_samples, b)
+        time_kernels = np.array([np.fft.ifft(sample).real for sample in block_fft_samples])
+        # Compute the mean time-domain kernel.
+        kernel_mean = time_kernels.mean(axis=0)
+        # Reconstruct the circulant matrix by rolling the mean kernel.
+        C_mean = np.stack([np.roll(kernel_mean, shift=k) for k in range(b)], axis=0)
+        
+        ax = axes[idx]
+        im = ax.imshow(C_mean, cmap="viridis")
+        ax.set_title(f"Block ({i},{j}) Circulant Matrix")
+        ax.set_xlabel("Index")
+        ax.set_ylabel("Index")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+    for ax in axes[total:]:
+        ax.set_visible(False)
+        
+    plt.tight_layout()
+    if show:
+        plt.show()
+    return fig
 
 
 ##############################################
@@ -492,18 +540,19 @@ def visualize_circulant_layer(fft_samples: np.ndarray, show=True):
 
 def visualize_block_circulant_layer(fft_samples_blocks: np.ndarray, show=True):
     """
-    Visualizes the FFT spectra and time-domain circulant kernels for each block in a grid.
-    Displays both magnitude/phase (with uncertainty if available) and the circulant matrix.
+    Visualizes the FFT spectra, phase, time-domain kernels, and full circulant matrices for each block.
     """
-    # FFT spectra for each block.
+    # FFT spectra with uncertainty.
     fig1, fig2 = plot_block_fft_spectra_with_uncertainty(fft_samples_blocks, show=False)
-    
-    # Circulant kernel visualization for each block.
+    # Time-domain kernels with uncertainty.
     fig3 = visualize_block_circulant_kernels_with_uncertainty(fft_samples_blocks, show=False)
+    # Full circulant matrices.
+    fig4 = visualize_block_circulant_matrices_with_uncertainty(fft_samples_blocks, show=False)
     
     if show:
         plt.show()
-    return fig1, fig2, fig3
+    return fig1, fig2, fig3, fig4
+
 
 
 ##############################################
