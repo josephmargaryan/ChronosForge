@@ -633,6 +633,7 @@ class SmoothTruncCirculantLayer:
     and truncates high frequencies (freq >= K).
     """
 
+
     def __init__(
         self,
         in_features: int,
@@ -643,8 +644,9 @@ class SmoothTruncCirculantLayer:
         self.in_features = in_features
         self.alpha = alpha
         self.name = name
-        self.k_half = in_features // 2 + 1
+        self.k_half = in_features // 2 + 1  # number of independent coefficients
 
+        # If K is not provided or is larger than the independent set, use k_half.
         if K is None or K > self.k_half:
             K = self.k_half
         self.K = K
@@ -653,32 +655,45 @@ class SmoothTruncCirculantLayer:
         self._last_fft_full = None  # shape (in_features,) complex
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
-        # (1) freq-dependent scale for each index
+        # (1) Compute frequency indices and frequency-dependent standard deviations.
         freq_indices = jnp.arange(self.k_half)
         prior_std = 1.0 / jnp.sqrt(1.0 + freq_indices**self.alpha)
 
-        # (2) Zero out freq >= K
-        mask = freq_indices < self.K
-        effective_scale = prior_std * mask  # shape (k_half,)
+        # (2) Determine which indices are active (k < K)
+        # (2) Determine active indices statically: the first K indices are active.
+        active_indices = jnp.arange(self.K)  # shape (K,)
+        n_active = self.K
 
-        # (3) Sample
-        real_part = numpyro.sample(
+
+        # (3) Sample only for active frequencies.
+        # For inactive frequencies, we'll fill with zeros.
+        active_real = numpyro.sample(
             f"{self.name}_real",
-            dist.Normal(0.0, effective_scale).to_event(1),
+            dist.Normal(0.0, prior_std[active_indices]).expand([n_active]).to_event(1),
         )
-        imag_part = numpyro.sample(
+        active_imag = numpyro.sample(
             f"{self.name}_imag",
-            dist.Normal(0.0, effective_scale).to_event(1),
+            dist.Normal(0.0, prior_std[active_indices]).expand([n_active]).to_event(1),
         )
 
-        # freq=0 => purely real
-        imag_part = imag_part.at[0].set(0.0)
-        # if even => freq=n/2 => real
-        if (self.in_features % 2 == 0) and (self.k_half > 1):
-            imag_part = imag_part.at[-1].set(0.0)
+        # Create full arrays for real and imaginary parts (length = k_half).
+        real_full = jnp.zeros((self.k_half,))
+        imag_full = jnp.zeros((self.k_half,))
 
-        half_complex = real_part + 1j * imag_part
+        real_full = real_full.at[active_indices].set(active_real)
+        imag_full = imag_full.at[active_indices].set(active_imag)
+
+        # Enforce that the DC component is real.
+        imag_full = imag_full.at[0].set(0.0)
+        # For even-length vectors, ensure the Nyquist frequency is real.
         if (self.in_features % 2 == 0) and (self.k_half > 1):
+            imag_full = imag_full.at[-1].set(0.0)
+
+        half_complex = real_full + 1j * imag_full
+
+        # (4) Reconstruct the full FFT coefficients using conjugate symmetry.
+        if (self.in_features % 2 == 0) and (self.k_half > 1):
+            # For even in_features, Nyquist is the last element of half_complex.
             nyquist = half_complex[-1].real[None]
             fft_full = jnp.concatenate(
                 [half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]]
@@ -691,22 +706,23 @@ class SmoothTruncCirculantLayer:
         # Cache for get_fourier_coeffs()
         self._last_fft_full = jax.lax.stop_gradient(fft_full)
 
-        # (5) Multiply
-        X_fft = jnp.fft.fft(X, axis=-1) if (X.ndim == 2) else jnp.fft.fft(X)
+        # (5) Multiply: Compute the FFT of the input X, multiply by fft_full, and perform inverse FFT.
         if X.ndim == 2:
+            X_fft = jnp.fft.fft(X, axis=-1)
             out_fft = X_fft * fft_full[None, :]
             out_time = jnp.fft.ifft(out_fft, axis=-1).real
         else:
+            X_fft = jnp.fft.fft(X)
             out_fft = X_fft * fft_full
             out_time = jnp.fft.ifft(out_fft).real
+
         return out_time
 
     def get_fourier_coeffs(self) -> jnp.ndarray:
         """Return the last-computed full FFT array (complex, length in_features)."""
         if self._last_fft_full is None:
             raise ValueError(
-                "No Fourier coefficients available. "
-                "Call the layer on some input first."
+                "No Fourier coefficients available. Call the layer on some input first."
             )
         return self._last_fft_full
 
@@ -752,19 +768,29 @@ class SmoothTruncBlockCirculantLayer:
         # 1) freq-dependent scale
         freq_idx = jnp.arange(self.k_half)
         prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**self.alpha)
-        # zero out freq >= K
-        mask = freq_idx < self.K
-        eff_scale = prior_std * mask  # shape (k_half,)
+        # Determine active indices statically: the first K indices are active.
+        active_indices = jnp.arange(self.K)  # shape (K,)
+        n_active = self.K
 
-        # 2) Sample real/imag of shape (k_out, k_in, k_half)
-        real_coeff = numpyro.sample(
+        # 2) Sample only for active frequencies.
+        active_real = numpyro.sample(
             f"{self.name}_real",
-            dist.Normal(0.0, eff_scale).expand([self.k_out, self.k_in, self.k_half]),
+            dist.Normal(0.0, prior_std[active_indices])
+                .expand([self.k_out, self.k_in, n_active])
+                .to_event(3),
         )
-        imag_coeff = numpyro.sample(
+        active_imag = numpyro.sample(
             f"{self.name}_imag",
-            dist.Normal(0.0, eff_scale).expand([self.k_out, self.k_in, self.k_half]),
+            dist.Normal(0.0, prior_std[active_indices])
+                .expand([self.k_out, self.k_in, n_active])
+                .to_event(3),
         )
+
+        # Create full arrays for real and imaginary parts (shape: (k_out, k_in, k_half))
+        real_coeff = jnp.zeros((self.k_out, self.k_in, self.k_half))
+        imag_coeff = jnp.zeros((self.k_out, self.k_in, self.k_half))
+        real_coeff = real_coeff.at[..., active_indices].set(active_real)
+        imag_coeff = imag_coeff.at[..., active_indices].set(active_imag)
 
         # freq=0 => purely real
         imag_coeff = imag_coeff.at[..., 0].set(0.0)
@@ -787,9 +813,7 @@ class SmoothTruncBlockCirculantLayer:
         block_fft_full = jax.vmap(
             lambda Rrow, Irow: jax.vmap(reconstruct_fft)(Rrow, Irow),
             in_axes=(0, 0),
-        )(
-            real_coeff, imag_coeff
-        )  # shape (k_out, k_in, b)
+        )(real_coeff, imag_coeff)  # shape (k_out, k_in, b)
 
         # stop_gradient store for get_fourier_coeffs
         self._last_block_fft = jax.lax.stop_gradient(block_fft_full)
@@ -815,9 +839,7 @@ class SmoothTruncBlockCirculantLayer:
             out_time, _ = jax.lax.scan(scan_j, init, jnp.arange(self.k_in))
             return out_time
 
-        out_blocks = jax.vmap(multiply_blockrow)(
-            jnp.arange(self.k_out)
-        )  # (k_out, bs, b)
+        out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))  # (k_out, bs, b)
         out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
             bs, self.k_out * self.b
         )
@@ -838,6 +860,7 @@ class SmoothTruncBlockCirculantLayer:
         if self._last_block_fft is None:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
+
 
 
 class ParticleLinear:
