@@ -376,6 +376,8 @@ def visualize_circulant_layer(fft_samples: np.ndarray, show=True):
 
     Example Usage:
     from quantbayes.stochax.utils import get_fft_full_for_given_params, visualize_circulant_layer
+    # Optionally Trigger the FFT layer's forward pass to update its stored coefficients.
+    _ = net.fft_layer(x)
     posterior_samples = model.get_samples
     param_dict = {key: value[0] for key, value in posterior_samples.items()}
 
@@ -414,6 +416,8 @@ def visualize_block_circulant_layer(fft_samples_blocks: np.ndarray, show=True):
     Example Usage:
 
     from quantbayes.stochax.utils import get_block_fft_full_for_given_params, visualize_block_circulant_layer
+    # Optionally Trigger the FFT layer's forward pass to update its stored coefficients.
+    _ = net.fft_layer(x)
     posterior_samples = model.get_samples
 
     param_dict = {key: value[0] for key, value in posterior_samples.items() if key != "logits"}
