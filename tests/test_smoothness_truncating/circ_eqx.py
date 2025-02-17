@@ -6,7 +6,6 @@ from quantbayes.stochax.layers import SmoothTruncEquinoxCirculant
 from quantbayes.stochax.utils import (
     plot_fft_spectrum,
     visualize_circulant_kernel,
-    plot_prior_posterior_frequency,
     compare_time_domain_truncation,
 )
 

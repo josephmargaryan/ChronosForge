@@ -5,6 +5,8 @@ import jax.random as jr
 import optax
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
 
 class MulticlassClassificationModel:
@@ -147,153 +149,57 @@ class MulticlassClassificationModel:
         preds = jax.vmap(forward_one, in_axes=(0, 0))(X, keys)
         return preds
 
-    def visualize(
-        self,
-        model,
-        state,
-        X_test: jnp.ndarray,
-        y_test: jnp.ndarray,
-        feature_indices: tuple = (0, 1),
-        unique_threshold: int = 10,
-        resolution: int = 200,
-        title: str = "Multiclass Decision Boundary",
-    ):
+    def visualize(self, model, state, X, y, key=jr.PRNGKey(0)):
         """
-        Visualize the decision boundary for a multiclass classifier.
-        Automatically checks if the two selected features are continuous or categorical.
+        Visualizes performance for a deterministic multiclass classification Equinox model.
 
-        Parameters
-        ----------
-        model : Equinox model
-            A trained multiclass classifier that outputs raw logits.
-        state : any
-            The model's state.
-        X_test : jnp.ndarray
-            Input features of shape (n_samples, n_features).
-        y_test : jnp.ndarray
-            True class labels (n_samples,).
-        feature_indices : tuple, optional
-            The two feature indices to visualize.
-        unique_threshold : int, optional
-            Maximum number of unique values for a feature to be considered categorical.
-        resolution : int, optional
-            Grid resolution for continuous features.
-        title : str, optional
-            Plot title.
+        The function computes the raw logits, applies softmax to get predicted probabilities,
+        determines the predicted class for each sample, and then shows:
+        - A confusion matrix.
+        - A bar chart of average predicted probabilities per class.
+
+        Parameters:
+            model: Equinox model returning (logits, state).
+            state: Model state.
+            X (jnp.ndarray): Input features.
+            y (jnp.ndarray): True class labels (as integers).
+            key: JAX random key.
         """
-        # Convert inputs to NumPy for plotting and inspection.
-        X_np = np.array(X_test)
-        y_np = np.array(y_test)
-        f1, f2 = feature_indices
-        unique_f1 = np.unique(X_np[:, f1])
-        unique_f2 = np.unique(X_np[:, f2])
-        is_f1_cat = len(unique_f1) < unique_threshold
-        is_f2_cat = len(unique_f2) < unique_threshold
+        inf_model = jax.tree_util.tree_map(lambda x: x, model)
+        keys = jr.split(key, X.shape[0])
+        logits = jax.vmap(lambda x, k: inf_model(x, state=state, key=k)[0])(X, keys)
+        logits = np.array(logits)
+        probs = jax.nn.softmax(logits, axis=-1)
+        probs = np.array(probs)
+        pred_classes = np.argmax(probs, axis=-1)
 
-        # Create an inference version of the model.
-        inf_model = eqx.tree_inference(model, value=True)
+        # Confusion matrix.
+        cm = confusion_matrix(y, pred_classes)
 
-        def predict_batch(X_input, key):
-            keys = jr.split(key, X_input.shape[0])
+        # Plot confusion matrix and average predicted probabilities.
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
-            def forward_one(x, subkey):
-                logits, _ = inf_model(x, state=state, key=subkey)
-                return logits
+        # Confusion matrix heatmap.
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=axs[0])
+        axs[0].set_xlabel("Predicted")
+        axs[0].set_ylabel("True")
+        axs[0].set_title("Confusion Matrix")
 
-            logits = jax.vmap(forward_one, in_axes=(0, 0))(X_input, keys)
-            # Apply softmax to get class probabilities.
-            probs = jax.nn.softmax(logits, axis=-1)
-            return probs
+        # Bar chart of average predicted probabilities per class.
+        avg_probs = np.mean(probs, axis=0)
+        num_classes = probs.shape[1]
+        axs[1].bar(
+            range(num_classes), avg_probs, color="mediumseagreen", edgecolor="black"
+        )
+        axs[1].set_xlabel("Class")
+        axs[1].set_ylabel("Average Predicted Probability")
+        axs[1].set_title("Average Predicted Probabilities")
+        axs[1].set_xticks(range(num_classes))
+        axs[1].set_xticklabels([f"Class {i}" for i in range(num_classes)])
 
-        # --- Case 1: Both features continuous ---
-        if not is_f1_cat and not is_f2_cat:
-            x_min, x_max = X_np[:, f1].min() - 0.5, X_np[:, f1].max() + 0.5
-            y_min, y_max = X_np[:, f2].min() - 0.5, X_np[:, f2].max() + 0.5
-            xx, yy = np.meshgrid(
-                np.linspace(x_min, x_max, resolution),
-                np.linspace(y_min, y_max, resolution),
-            )
-            n_features = X_np.shape[1]
-            grid_list = []
-            for i in range(n_features):
-                if i == f1:
-                    grid_list.append(xx.ravel())
-                elif i == f2:
-                    grid_list.append(yy.ravel())
-                else:
-                    grid_list.append(np.full(xx.ravel().shape, X_np[:, i].mean()))
-            grid_arr = np.stack(grid_list, axis=1)
-            grid_key = jr.PRNGKey(42)
-            probs = predict_batch(jnp.array(grid_arr), grid_key)
-            # For multiclass, take the class with maximum probability.
-            class_preds = np.argmax(np.array(probs), axis=-1).reshape(xx.shape)
-            plt.figure(figsize=(8, 6))
-            plt.contourf(xx, yy, class_preds, alpha=0.3, cmap=plt.cm.Paired)
-            plt.scatter(
-                X_np[:, f1], X_np[:, f2], c=y_np, edgecolor="k", cmap=plt.cm.Paired
-            )
-            plt.xlabel(f"Feature {f1}")
-            plt.ylabel(f"Feature {f2}")
-            plt.title(title)
-            plt.grid(True)
-            plt.show()
-
-        # --- Case 2: One feature categorical, one continuous ---
-        elif (is_f1_cat and not is_f2_cat) or (not is_f1_cat and is_f2_cat):
-            if is_f1_cat:
-                cat_idx, cont_idx = f1, f2
-            else:
-                cat_idx, cont_idx = f2, f1
-            unique_cats = np.unique(X_np[:, cat_idx])
-            num_cats = len(unique_cats)
-            fig, axes = plt.subplots(
-                1, num_cats, figsize=(5 * num_cats, 5), squeeze=False
-            )
-            for j, cat in enumerate(unique_cats):
-                ax = axes[0, j]
-                mask = X_np[:, cat_idx] == cat
-                cont_vals = X_np[:, cont_idx]
-                c_min, c_max = cont_vals.min() - 0.5, cont_vals.max() + 0.5
-                cont_grid = np.linspace(c_min, c_max, resolution)
-                n_features = X_np.shape[1]
-                grid_list = []
-                for i in range(n_features):
-                    if i == cont_idx:
-                        grid_list.append(cont_grid)
-                    elif i == cat_idx:
-                        grid_list.append(np.full(cont_grid.shape, cat))
-                    else:
-                        grid_list.append(np.full(cont_grid.shape, X_np[:, i].mean()))
-                grid_arr = np.stack(grid_list, axis=1)
-                grid_key = jr.PRNGKey(42)
-                probs = predict_batch(jnp.array(grid_arr), grid_key)
-                class_preds = np.argmax(np.array(probs), axis=-1)
-                ax.plot(cont_grid, class_preds, label="Decision Boundary")
-                ax.scatter(
-                    X_np[mask, cont_idx],
-                    y_np[mask],
-                    c="k",
-                    edgecolors="w",
-                    label="Data",
-                )
-                ax.set_title(f"Feature {cat_idx} = {cat}")
-                ax.set_xlabel(f"Feature {cont_idx}")
-                ax.set_ylabel("Predicted class")
-                ax.legend()
-            plt.suptitle(title)
-            plt.show()
-
-        # --- Case 3: Both features categorical ---
-        else:
-            plt.figure(figsize=(8, 6))
-            plt.scatter(
-                X_np[:, f1], X_np[:, f2], c=y_np, cmap=plt.cm.Paired, edgecolors="k"
-            )
-            plt.xlabel(f"Feature {f1}")
-            plt.ylabel(f"Feature {f2}")
-            plt.title(title + " (Both features categorical)")
-            plt.grid(True)
-            plt.show()
+        plt.suptitle("Multiclass Classification Performance")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
 
 
 if __name__ == "__main__":
@@ -351,12 +257,4 @@ if __name__ == "__main__":
     logits = trainer.predict(model, state, jnp.array(X_test))
     probs = jax.nn.softmax(logits, axis=-1)
     print(f"Log loss: {log_loss(np.array(y_test), np.array(probs))}")
-
-    trainer.visualize(
-        model,
-        state,
-        jnp.array(X_test),
-        np.array(y_test),
-        feature_indices=(0, 1),
-        title="Multiclass Classification Demo",
-    )
+    trainer.visualize(model, state, X_train, y_train, jax.random.key(35))

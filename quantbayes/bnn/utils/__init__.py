@@ -7,6 +7,10 @@ from .model_calibration import (
 from .generalization_bound import BayesianAnalysis
 from .hdi_plot import plot_hdi
 from .mcmc_metrics import evaluate_mcmc
+from .vis_classification import (
+    visualize_uncertainty_multiclass,
+    visualize_uncertainty_binary,
+)
 
 __all__ = [
     "EntropyAndMutualInformation",
@@ -16,4 +20,6 @@ __all__ = [
     "expected_calibration_error",
     "plot_hdi",
     "evaluate_mcmc",
+    "visualize_uncertainty_multiclass",
+    "visualize_uncertainty_binary",
 ]

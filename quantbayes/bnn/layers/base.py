@@ -1,22 +1,16 @@
-from typing import Optional, Tuple
+from typing import Optional
 import jax
-import jax.random as jr
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.metrics import roc_curve, auc, confusion_matrix
+from sklearn.calibration import calibration_curve
 from numpyro.infer import SVI, Trace_ELBO, Predictive, MCMC, NUTS
 from numpyro.infer.autoguide import AutoNormal
 from numpyro.contrib.einstein import SteinVI, RBFKernel, MixtureGuidePredictive
 from numpyro.optim import Adam, Adagrad, SGD
 import pickle
 import numpy as np
-
-from quantbayes.stochax.utils import (
-    visualize_circulant_kernel,
-    plot_fft_spectrum,
-    plot_block_fft_spectra,
-    visualize_block_circulant_kernels,
-)
 
 
 class Module:
@@ -188,11 +182,11 @@ class Module:
         self,
         X,
         y=None,
-        num_classes=None,
+        rng_key=jax.random.key(235),
         posterior="logits",
-        features=(0, 1),
-        resolution=100,
-        feature_index=None,
+        num_classes=10,
+        num_samples=None,
+        credible_interval=90,
     ):
         """
         Visualizes model outputs based on the task type.
@@ -202,18 +196,29 @@ class Module:
         visualization function.
         """
         if self.task_type == "multiclass":
-            if num_classes is None:
-                raise ValueError(
-                    "num_classes must be provided for multiclass visualization."
-                )
             self._visualize_multiclass(
-                X, y, num_classes, features, resolution, posterior
+                X_test=X,
+                y_test=y,
+                rng_key=rng_key,
+                posterior=posterior,
+                num_samples=num_samples,
             )
         elif self.task_type == "binary":
-            self._visualize_binary(X, y, features, resolution, posterior)
+            self._visualize_binary(
+                X_test=X,
+                y_test=y,
+                rng_key=rng_key,
+                posterior=posterior,
+                num_samples=num_samples,
+            )
         elif self.task_type == "regression":
             self._visualize_regression(
-                X, y, posterior=posterior, grid_points=100, unique_threshold=10
+                X_test=X,
+                y_test=y,
+                rng_key=rng_key,
+                posterior=posterior,
+                num_samples=num_samples,
+                credible_interval=credible_interval,
             )
         elif self.task_type == "image_classification":
             self._visualize_image_classification(X, y, num_classes, posterior)
@@ -299,648 +304,225 @@ class Module:
         plt.tight_layout()
         plt.show()
 
-    def _visualize_multiclass(
-        self,
-        X,
-        y,
-        num_classes: int,
-        features: Tuple[int, int] = (0, 1),
-        resolution: int = 100,
-        posterior: str = "logits",
-        unique_threshold: int = 10,
-    ):
-        """
-        Unified visualization for multiclass classification.
-
-        If both selected features are continuous, a 2D grid is used to plot the decision boundary
-        along with uncertainty (entropy). If one of the features is categorical, a subplot is generated
-        for each category value; if both are categorical, a scatter plot is shown.
-
-        Parameters
-        ----------
-        X : jnp.ndarray
-            Input data, shape (n_samples, n_features).
-        y : jnp.ndarray
-            True labels.
-        num_classes : int
-            Number of classes.
-        features : tuple of int, optional
-            Indices of the two features to visualize.
-        resolution : int, optional
-            Grid resolution.
-        posterior : str, optional
-            Which posterior mode to use for predictions.
-        unique_threshold : int, optional
-            Maximum number of unique values for a feature to be treated as categorical.
-        """
-        # Convert to NumPy for inspection and plotting.
-        X_np = np.array(X)
-        y_np = np.array(y)
-        f1, f2 = features
-        unique_f1 = np.unique(X_np[:, f1])
-        unique_f2 = np.unique(X_np[:, f2])
-        is_f1_cat = len(unique_f1) < unique_threshold
-        is_f2_cat = len(unique_f2) < unique_threshold
-
-        # CASE 1: Both features continuous.
-        if not is_f1_cat and not is_f2_cat:
-            x_min, x_max = X_np[:, f1].min() - 1, X_np[:, f1].max() + 1
-            y_min, y_max = X_np[:, f2].min() - 1, X_np[:, f2].max() + 1
-            xx, yy = jnp.meshgrid(
-                jnp.linspace(x_min, x_max, resolution),
-                jnp.linspace(y_min, y_max, resolution),
-            )
-            # Build a full-grid input: for nonvisualized features, use their mean.
-            grid_points = jnp.c_[xx.ravel(), yy.ravel()]
-            grid_points_full = jnp.zeros((grid_points.shape[0], X.shape[1]))
-            grid_points_full = grid_points_full.at[:, f1].set(grid_points[:, 0])
-            grid_points_full = grid_points_full.at[:, f2].set(grid_points[:, 1])
-            # Predict on grid points.
-            pred_samples = self.predict(
-                grid_points_full, jax.random.PRNGKey(0), posterior=posterior
-            )  # shape: [num_samples, resolution^2, num_classes]
-            grid_mean_predictions = jax.nn.softmax(pred_samples.mean(axis=0), axis=-1)
-            grid_classes = jnp.argmax(grid_mean_predictions, axis=-1).reshape(xx.shape)
-            grid_uncertainty = -jnp.sum(
-                grid_mean_predictions * jnp.log(grid_mean_predictions + 1e-9), axis=-1
-            ).reshape(xx.shape)
-
-            plt.figure(figsize=(10, 6))
-            plt.contourf(
-                np.array(xx),
-                np.array(yy),
-                np.array(grid_classes),
-                levels=num_classes,
-                cmap=plt.cm.RdYlBu,
-                alpha=0.6,
-            )
-            plt.colorbar(label="Predicted Class")
-            plt.contourf(
-                np.array(xx),
-                np.array(yy),
-                np.array(grid_uncertainty),
-                levels=20,
-                cmap="gray",
-                alpha=0.4,
-            )
-            plt.colorbar(label="Uncertainty (Entropy)")
-            plt.scatter(
-                X_np[:, f1],
-                X_np[:, f2],
-                c=y_np,
-                edgecolor="k",
-                cmap=plt.cm.RdYlBu,
-                s=20,
-            )
-            plt.title("Multiclass Decision Boundaries with Uncertainty")
-            plt.xlabel(f"Feature {f1 + 1}")
-            plt.ylabel(f"Feature {f2 + 1}")
-            plt.grid(True)
-            plt.show()
-
-        # CASE 2: One feature categorical, one continuous.
-        elif (is_f1_cat and not is_f2_cat) or (not is_f1_cat and is_f2_cat):
-            # Let the categorical feature be the one with fewer unique values.
-            if is_f1_cat:
-                cat_idx, cont_idx = f1, f2
-            else:
-                cat_idx, cont_idx = f2, f1
-            unique_cats = np.unique(X_np[:, cat_idx])
-            num_cats = len(unique_cats)
-            fig, axes = plt.subplots(
-                1, num_cats, figsize=(5 * num_cats, 5), squeeze=False
-            )
-            for j, cat in enumerate(unique_cats):
-                ax = axes[0, j]
-                mask = X_np[:, cat_idx] == cat
-                cont_vals = X_np[:, cont_idx]
-                c_min, c_max = cont_vals.min() - 1, cont_vals.max() + 1
-                cont_grid = jnp.linspace(c_min, c_max, resolution)
-                n_features = X_np.shape[1]
-                # For each value in the continuous grid, fix the categorical feature.
-                grid_list = []
-                for i in range(n_features):
-                    if i == cont_idx:
-                        grid_list.append(cont_grid)
-                    elif i == cat_idx:
-                        grid_list.append(jnp.full(cont_grid.shape, cat))
-                    else:
-                        grid_list.append(
-                            jnp.full(cont_grid.shape, jnp.array(X_np[:, i]).mean())
-                        )
-                grid_arr = jnp.stack(
-                    grid_list, axis=1
-                )  # shape: (resolution, n_features)
-                pred_samples = self.predict(
-                    grid_arr, jax.random.PRNGKey(42), posterior=posterior
-                )  # shape: [num_samples, resolution, num_classes]
-                probs = jax.nn.softmax(pred_samples.mean(axis=0), axis=-1)
-                class_preds = jnp.argmax(probs, axis=-1)
-                ax.plot(
-                    np.array(cont_grid),
-                    np.array(class_preds),
-                    label="Decision Boundary",
-                )
-                ax.scatter(
-                    X_np[mask, cont_idx], y_np[mask], c="k", edgecolor="w", label="Data"
-                )
-                ax.set_title(f"Feature {cat_idx} = {cat}")
-                ax.set_xlabel(f"Feature {cont_idx}")
-                ax.set_ylabel("Predicted class")
-                ax.legend()
-            plt.suptitle("Multiclass Decision Boundary with Categorical Feature")
-            plt.show()
-
-        # CASE 3: Both features categorical.
-        else:
-            plt.figure(figsize=(8, 6))
-            plt.scatter(
-                X_np[:, f1], X_np[:, f2], c=y_np, cmap=plt.cm.RdYlBu, edgecolor="k"
-            )
-            plt.xlabel(f"Feature {f1}")
-            plt.ylabel(f"Feature {f2}")
-            plt.title("Multiclass Decision Boundary (Both features categorical)")
-            plt.grid(True)
-            plt.show()
-
-    def _visualize_binary(
-        self,
-        X,
-        y,
-        features: Tuple[int, int] = (0, 1),
-        resolution: int = 100,
-        posterior: str = "logits",
-        unique_threshold: int = 10,
-    ):
-        """
-        Unified visualization for binary classification.
-
-        If both selected features are continuous, a 2D grid is used to display the decision boundary
-        (probability map) and uncertainty (via binary entropy). If one of the features is categorical,
-        a subplot is generated for each category; if both are categorical, a scatter plot is shown.
-
-        Parameters
-        ----------
-        X : jnp.ndarray
-            Input data, shape (n_samples, n_features).
-        y : jnp.ndarray
-            Binary labels.
-        features : tuple of int, optional
-            The two features to visualize.
-        resolution : int, optional
-            Grid resolution.
-        posterior : str, optional
-            Which posterior mode to use for predictions.
-        unique_threshold : int, optional
-            Maximum number of unique values for a feature to be considered categorical.
-        """
-        X_np = np.array(X)
-        y_np = np.array(y)
-        f1, f2 = features
-        unique_f1 = np.unique(X_np[:, f1])
-        unique_f2 = np.unique(X_np[:, f2])
-        is_f1_cat = len(unique_f1) < unique_threshold
-        is_f2_cat = len(unique_f2) < unique_threshold
-
-        # CASE 1: Both features continuous.
-        if not is_f1_cat and not is_f2_cat:
-            x_min, x_max = X_np[:, f1].min() - 1, X_np[:, f1].max() + 1
-            y_min, y_max = X_np[:, f2].min() - 1, X_np[:, f2].max() + 1
-            xx, yy = jnp.meshgrid(
-                jnp.linspace(x_min, x_max, resolution),
-                jnp.linspace(y_min, y_max, resolution),
-            )
-            grid_points = jnp.c_[xx.ravel(), yy.ravel()]
-            grid_points_full = jnp.zeros((grid_points.shape[0], X.shape[1]))
-            grid_points_full = grid_points_full.at[:, f1].set(grid_points[:, 0])
-            grid_points_full = grid_points_full.at[:, f2].set(grid_points[:, 1])
-            pred_samples = self.predict(
-                grid_points_full, jax.random.PRNGKey(0), posterior=posterior
-            )  # shape: [num_samples, grid_points]
-            grid_mean_predictions = jax.nn.sigmoid(pred_samples.mean(axis=0))
-            grid_uncertainty = -(
-                grid_mean_predictions * jnp.log(grid_mean_predictions + 1e-9)
-                + (1 - grid_mean_predictions)
-                * jnp.log(1 - grid_mean_predictions + 1e-9)
-            )
-            grid_mean_predictions = grid_mean_predictions.reshape(xx.shape)
-            grid_uncertainty = grid_uncertainty.reshape(xx.shape)
-            plt.figure(figsize=(10, 6))
-            plt.contourf(
-                np.array(xx),
-                np.array(yy),
-                np.array(grid_mean_predictions),
-                levels=100,
-                cmap=plt.cm.RdYlBu,
-                alpha=0.8,
-            )
-            plt.colorbar(label="Probability of Class 1")
-            plt.contourf(
-                np.array(xx),
-                np.array(yy),
-                np.array(grid_uncertainty),
-                levels=20,
-                cmap="gray",
-                alpha=0.4,
-            )
-            plt.colorbar(label="Uncertainty (Entropy)")
-            plt.scatter(
-                X_np[:, f1],
-                X_np[:, f2],
-                c=y_np,
-                edgecolor="k",
-                cmap=plt.cm.RdYlBu,
-                s=20,
-            )
-            plt.title("Binary Decision Boundary with Uncertainty")
-            plt.xlabel(f"Feature {f1 + 1}")
-            plt.ylabel(f"Feature {f2 + 1}")
-            plt.grid(True)
-            plt.show()
-
-        # CASE 2: One feature categorical, one continuous.
-        elif (is_f1_cat and not is_f2_cat) or (not is_f1_cat and is_f2_cat):
-            if is_f1_cat:
-                cat_idx, cont_idx = f1, f2
-            else:
-                cat_idx, cont_idx = f2, f1
-            unique_cats = np.unique(X_np[:, cat_idx])
-            num_cats = len(unique_cats)
-            fig, axes = plt.subplots(
-                1, num_cats, figsize=(5 * num_cats, 5), squeeze=False
-            )
-            for j, cat in enumerate(unique_cats):
-                ax = axes[0, j]
-                mask = X_np[:, cat_idx] == cat
-                cont_vals = X_np[:, cont_idx]
-                c_min, c_max = cont_vals.min() - 1, cont_vals.max() + 1
-                cont_grid = jnp.linspace(c_min, c_max, resolution)
-                n_features = X_np.shape[1]
-                grid_list = []
-                for i in range(n_features):
-                    if i == cont_idx:
-                        grid_list.append(cont_grid)
-                    elif i == cat_idx:
-                        grid_list.append(jnp.full(cont_grid.shape, cat))
-                    else:
-                        grid_list.append(
-                            jnp.full(cont_grid.shape, jnp.array(X_np[:, i]).mean())
-                        )
-                grid_arr = jnp.stack(grid_list, axis=1)
-                pred_samples = self.predict(
-                    grid_arr, jax.random.PRNGKey(42), posterior=posterior
-                )
-                grid_mean_predictions = jax.nn.sigmoid(pred_samples.mean(axis=0))
-                class_preds = (grid_mean_predictions > 0.5).astype(jnp.int32)
-                ax.plot(
-                    np.array(cont_grid),
-                    np.array(class_preds),
-                    label="Decision Boundary",
-                )
-                ax.scatter(
-                    X_np[mask, cont_idx], y_np[mask], c="k", edgecolor="w", label="Data"
-                )
-                ax.set_title(f"Feature {cat_idx} = {cat}")
-                ax.set_xlabel(f"Feature {cont_idx}")
-                ax.set_ylabel("Predicted class")
-                ax.legend()
-            plt.suptitle("Binary Decision Boundary with Categorical Feature")
-            plt.show()
-
-        # CASE 3: Both features categorical.
-        else:
-            plt.figure(figsize=(8, 6))
-            plt.scatter(
-                X_np[:, f1], X_np[:, f2], c=y_np, cmap=plt.cm.RdYlBu, edgecolors="k"
-            )
-            plt.xlabel(f"Feature {f1}")
-            plt.ylabel(f"Feature {f2}")
-            plt.title("Binary Decision Boundary (Both features categorical)")
-            plt.grid(True)
-            plt.show()
-
     def _visualize_regression(
         self,
-        X: jnp.ndarray,
-        y: jnp.ndarray,
-        posterior: str = "logits",
-        grid_points: int = 100,
-        unique_threshold: int = 10,
+        X_test,
+        y_test,
+        rng_key,
+        posterior="logits",
+        num_samples=None,
+        credible_interval=90,
     ):
         """
-        Unified visualization for regression tasks.
+        Visualizes regression predictions. For a single feature, it plots the predictive
+        mean and credible interval against the feature (using a line plot). For multiple
+        features, it uses a scatter plot of predicted vs. true values with error bars and
+        also a residual plot.
 
-        This function automatically inspects the input data X and y to decide whether to
-        produce a single-feature or multi-feature visualization. For each feature, it
-        further determines whether it is continuous (many unique values) or categorical
-        (few unique values) and applies the appropriate plots:
-
-        - Continuous features: PDP (with a KDE density overlay) and ICE curves.
-        - Categorical features: Bar plot for PDP and box plot for ICE.
-
-        Parameters
-        ----------
-        X : jnp.ndarray
-            Input data of shape (n_samples, n_features).
-        y : jnp.ndarray
-            Target values of shape (n_samples,).
-        posterior : str, optional
-            The posterior mode to use for predictions.
-        grid_points : int, optional
-            Number of grid points used for continuous plots.
-        unique_threshold : int, optional
-            Maximum number of unique values for a feature to be treated as categorical.
+        Parameters:
+            X_test (np.ndarray): Test input data.
+                - For 1D regression, an array of shape (n_samples,) or (n_samples, 1).
+                - For multi-feature regression, an array of shape (n_samples, n_features) where n_features > 1.
+            y_test (np.ndarray): True target values of shape (n_samples,).
+            rng_key: Random key for sampling predictions.
+            posterior (str): Which posterior to use (default: 'logits').
+            num_samples (int): Number of samples to draw from the predictive distribution.
+            credible_interval (float): Percentage for the credible interval (e.g., 90 for 90% interval).
         """
-        # Convert to NumPy arrays for inspection and plotting.
-        X_np = np.asarray(X)
-        y_np = np.asarray(y).squeeze()
-        n_samples, n_features = X_np.shape
+        # Obtain predictive samples (assumed shape: [num_samples, n_data])
+        preds = self.predict(
+            X_test, rng_key, posterior=posterior, num_samples=num_samples
+        )
+        preds = np.array(preds)  # Ensure we are working with a NumPy array
 
-        # Helper function to predict with our model.
-        def model_predict(X_input):
-            key = jr.PRNGKey(0)
-            preds = self.predict(jnp.array(X_input), key, posterior=posterior)
-            return np.asarray(preds)
+        # Compute predictive mean and credible intervals (using percentiles)
+        pred_mean = np.mean(preds, axis=0)
+        lower_bound = np.percentile(preds, (100 - credible_interval) / 2, axis=0)
+        upper_bound = np.percentile(preds, 100 - (100 - credible_interval) / 2, axis=0)
 
-        # --- Single-Feature Case ---
-        if n_features == 1:
-            # Determine if the single feature is categorical.
-            unique_vals = np.unique(X_np[:, 0])
-            is_categorical = len(unique_vals) < unique_threshold
-
-            if is_categorical:
-                # Categorical single-feature visualization.
-                baseline = np.mean(X_np, axis=0)
-                cat_means = []
-                for cat in unique_vals:
-                    sample = baseline.copy()
-                    sample[0] = cat
-                    pred = model_predict(sample[None, :])[0]
-                    pred_scalar = float(np.array(pred).squeeze())
-                    cat_means.append(pred_scalar)
-                plt.figure(figsize=(10, 6))
-                plt.bar(unique_vals, cat_means, alpha=0.7, capsize=5)
-                plt.xlabel("Feature (Categorical)")
-                plt.ylabel("Predicted Target")
-                plt.title("Categorical PDP")
-                plt.show()
-
-                # For ICE, collect predictions for each category and plot as boxplots.
-                cat_preds = {}
-                for cat in unique_vals:
-                    mask = X_np[:, 0] == cat
-                    if np.sum(mask) > 0:
-                        preds = model_predict(
-                            X_np[mask, :]
-                        )  # shape: (n_posterior, n_samples_in_cat)
-                        preds_mean = preds.mean(
-                            axis=0
-                        ).squeeze()  # shape: (n_samples_in_cat,)
-                        cat_preds[cat] = preds_mean
-                plt.figure(figsize=(10, 6))
-                box_data = [cat_preds[cat] for cat in unique_vals if cat in cat_preds]
-                plt.boxplot(box_data, labels=unique_vals)
-                plt.xlabel("Feature (Categorical)")
-                plt.ylabel("Predicted Target")
-                plt.title("Categorical ICE")
-                plt.show()
-
-            else:
-                # Continuous single-feature visualization.
-                cont_vals = X_np[:, 0]
-                cont_min, cont_max = float(np.min(cont_vals)), float(np.max(cont_vals))
-                cont_grid = np.linspace(cont_min, cont_max, grid_points)
-                baseline = np.mean(X_np, axis=0)
-                X_pdp = np.tile(baseline, (grid_points, 1))
-                X_pdp[:, 0] = cont_grid
-                pdp_preds = model_predict(X_pdp)  # shape: (n_posterior, grid_points)
-
-                plt.figure(figsize=(10, 6))
-                sns.kdeplot(
-                    x=cont_vals, y=y_np, cmap="Blues", fill=True, alpha=0.5, thresh=0.05
-                )
-                # Plot PDP (mean over posterior samples)
-                plt.plot(
-                    cont_grid,
-                    pdp_preds.mean(axis=0).squeeze(),
-                    color="red",
-                    label="Mean Prediction (PDP)",
-                )
-                plt.xlabel("Feature (Continuous)")
-                plt.ylabel("Target")
-                plt.title("Continuous PDP")
-                plt.legend()
-                plt.show()
-
-                # ICE for continuous feature.
-                # For clarity, we select one (or a few) individuals.
-                rng = np.random.default_rng(42)
-                # Here, we choose one random individual from the dataset.
-                idx = rng.choice(n_samples)
-                sample = X_np[idx, :].copy()
-                X_ice = np.tile(sample, (grid_points, 1))
-                X_ice[:, 0] = cont_grid
-                ice_preds = model_predict(X_ice)  # shape: (n_posterior, grid_points)
-
-                # Compute summary statistics over all posterior samples.
-                mean_ice = np.mean(ice_preds, axis=0)
-                lower_ice = np.percentile(ice_preds, 5, axis=0)
-                upper_ice = np.percentile(ice_preds, 95, axis=0)
-
-                # Randomly select up to 30 posterior samples to display.
-                n_posterior = ice_preds.shape[0]
-                if n_posterior > 30:
-                    sample_indices = rng.choice(n_posterior, size=30, replace=False)
-                else:
-                    sample_indices = np.arange(n_posterior)
-
-                plt.figure(figsize=(10, 6))
-                # Shaded credible interval from all posterior samples.
-                plt.fill_between(
-                    cont_grid,
-                    lower_ice,
-                    upper_ice,
-                    color="lightblue",
-                    alpha=0.5,
-                    label="90% Credible Interval",
-                )
-                # Plot a subset of individual ICE curves.
-                for i in sample_indices:
-                    plt.plot(
-                        cont_grid,
-                        ice_preds[i],
-                        color="dodgerblue",
-                        linewidth=0.5,
-                        alpha=0.7,
-                    )
-                # Overlay the mean ICE curve.
-                plt.plot(
-                    cont_grid,
-                    mean_ice,
-                    color="darkred",
-                    linewidth=2,
-                    label="Mean Prediction (ICE)",
-                )
-                plt.xlabel("Feature (Continuous)")
-                plt.ylabel("Target")
-                plt.title("Continuous ICE")
-                plt.legend()
-                plt.show()
-
-        # --- Multi-Feature Case ---
+        # Check if we have a single feature (1D) or multiple features
+        if (X_test.ndim == 1) or (X_test.ndim == 2 and X_test.shape[1] == 1):
+            # Single feature: sort by the feature values and create a line plot.
+            plt.figure(figsize=(10, 6))
+            plt.scatter(X_test, y_test, color="black", label="True values", alpha=0.7)
+            sorted_idx = np.argsort(X_test.flatten())
+            plt.plot(
+                X_test.flatten()[sorted_idx],
+                pred_mean.flatten()[sorted_idx],
+                color="blue",
+                label="Predictive mean",
+                lw=2,
+            )
+            plt.fill_between(
+                X_test.flatten()[sorted_idx],
+                lower_bound.flatten()[sorted_idx],
+                upper_bound.flatten()[sorted_idx],
+                color="blue",
+                alpha=0.2,
+                label=f"{credible_interval}% Credible Interval",
+            )
+            plt.xlabel("X")
+            plt.ylabel("y")
+            plt.title("Regression Predictions with Uncertainty")
+            plt.legend()
+            plt.show()
         else:
-            # Classify features.
-            continuous_features = []
-            categorical_features = []
-            for i in range(n_features):
-                if len(np.unique(X_np[:, i])) < unique_threshold:
-                    categorical_features.append(i)
-                else:
-                    continuous_features.append(i)
+            # Multiple features: use a scatter plot of predicted vs. true values.
+            fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
-            # Decide on subplot grid:
-            # If both continuous and categorical representative features exist, use 2x2;
-            # otherwise, use 1x2.
-            if continuous_features and categorical_features:
-                nrows = 2
-            else:
-                nrows = 1
-            ncols = 2
-            fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 5))
-            if nrows == 1:
-                axes = np.expand_dims(axes, axis=0)
+            # (1) Scatter plot: predicted vs. true with error bars.
+            axs[0].errorbar(
+                pred_mean,
+                y_test,
+                yerr=[y_test - lower_bound, upper_bound - y_test],
+                fmt="o",
+                alpha=0.6,
+                ecolor="gray",
+                capsize=3,
+            )
+            # 45-degree line for reference.
+            min_val = min(y_test.min(), pred_mean.min())
+            max_val = max(y_test.max(), pred_mean.max())
+            axs[0].plot([min_val, max_val], [min_val, max_val], "k--", lw=2)
+            axs[0].set_xlabel("Predicted")
+            axs[0].set_ylabel("True")
+            axs[0].set_title("Predicted vs. True Values")
 
-            # --- Continuous Visualization (if any continuous features exist) ---
-            if continuous_features:
-                cont_idx = continuous_features[0]
-                cont_vals = X_np[:, cont_idx]
-                cont_min = float(np.min(cont_vals))
-                cont_max = float(np.max(cont_vals))
-                cont_grid = np.linspace(cont_min, cont_max, grid_points)
-                baseline = np.mean(X_np, axis=0)
-                X_pdp = np.tile(baseline, (grid_points, 1))
-                X_pdp[:, cont_idx] = cont_grid
-                pdp_preds = model_predict(X_pdp)  # shape: (n_posterior, grid_points)
-                mean_pdp_preds = pdp_preds.mean(
-                    axis=0
-                ).squeeze()  # shape: (grid_points,)
-                ax_cont_pdp = axes[0, 0]
-                sns.kdeplot(
-                    x=cont_vals,
-                    y=y_np,
-                    ax=ax_cont_pdp,
-                    cmap="Blues",
-                    fill=True,
-                    alpha=0.5,
-                    thresh=0.05,
-                )
-                ax_cont_pdp.plot(
-                    cont_grid, mean_pdp_preds, color="red", label="Mean Prediction"
-                )
-                ax_cont_pdp.set_xlabel(f"Feature {cont_idx} (Continuous)")
-                ax_cont_pdp.set_ylabel("Target")
-                ax_cont_pdp.set_title("Continuous PDP")
-                ax_cont_pdp.legend()
-
-                # ICE for continuous feature.
-                # Here, we select one random individual for illustration.
-                rng = np.random.default_rng(42)
-                idx = rng.choice(n_samples)
-                sample = X_np[idx, :].copy()
-                X_ice = np.tile(sample, (grid_points, 1))
-                X_ice[:, cont_idx] = cont_grid
-                ice_preds = model_predict(X_ice)  # shape: (n_posterior, grid_points)
-                mean_ice = np.mean(ice_preds, axis=0)
-                lower_ice = np.percentile(ice_preds, 5, axis=0)
-                upper_ice = np.percentile(ice_preds, 95, axis=0)
-                n_posterior = ice_preds.shape[0]
-                if n_posterior > 30:
-                    sample_indices = rng.choice(n_posterior, size=30, replace=False)
-                else:
-                    sample_indices = np.arange(n_posterior)
-                ax_cont_ice = axes[0, 1]
-                ax_cont_ice.fill_between(
-                    cont_grid,
-                    lower_ice,
-                    upper_ice,
-                    color="lightblue",
-                    alpha=0.5,
-                    label="90% Credible Interval",
-                )
-                for i in sample_indices:
-                    ax_cont_ice.plot(
-                        cont_grid,
-                        ice_preds[i],
-                        color="dodgerblue",
-                        linewidth=0.5,
-                        alpha=0.7,
-                    )
-                ax_cont_ice.plot(
-                    cont_grid,
-                    mean_ice,
-                    color="darkred",
-                    linewidth=2,
-                    label="Mean Prediction",
-                )
-                ax_cont_ice.set_xlabel(f"Feature {cont_idx} (Continuous)")
-                ax_cont_ice.set_ylabel("Target")
-                ax_cont_ice.set_title("Continuous ICE")
-                ax_cont_ice.legend()
-            else:
-                # Hide the top row if no continuous features.
-                for j in range(ncols):
-                    axes[0, j].axis("off")
-
-            # --- Categorical Visualization (if any categorical features exist) ---
-            if categorical_features:
-                cat_idx = categorical_features[0]
-                cat_vals = X_np[:, cat_idx]
-                unique_cats = np.unique(cat_vals)
-                baseline = np.mean(X_np, axis=0)
-                cat_means = []
-                for cat in unique_cats:
-                    sample = baseline.copy()
-                    sample[cat_idx] = cat
-                    pred = model_predict(sample[None, :])[0]
-                    pred_scalar = float(np.array(pred).squeeze())
-                    cat_means.append(pred_scalar)
-                cat_row = 1 if (continuous_features and categorical_features) else 0
-                ax_cat_pdp = axes[cat_row, 0]
-                ax_cat_pdp.bar(unique_cats, cat_means, alpha=0.7, capsize=5)
-                ax_cat_pdp.set_xlabel(f"Feature {cat_idx} (Categorical)")
-                ax_cat_pdp.set_ylabel("Predicted Target")
-                ax_cat_pdp.set_title("Categorical PDP")
-
-                # Categorical ICE using boxplots.
-                cat_predictions = {}
-                for cat in unique_cats:
-                    mask = cat_vals == cat
-                    X_cat = X_np[mask, :]
-                    if X_cat.shape[0] > 0:
-                        preds_cat = model_predict(
-                            X_cat
-                        )  # shape: (n_posterior, n_cat_samples)
-                        preds_cat_mean = preds_cat.mean(
-                            axis=0
-                        ).squeeze()  # shape: (n_cat_samples,)
-                        cat_predictions[cat] = preds_cat_mean
-                ax_cat_ice = axes[cat_row, 1]
-                boxplot_data = [
-                    cat_predictions[cat]
-                    for cat in unique_cats
-                    if cat in cat_predictions
-                ]
-                ax_cat_ice.boxplot(boxplot_data, labels=unique_cats)
-                ax_cat_ice.set_xlabel(f"Feature {cat_idx} (Categorical)")
-                ax_cat_ice.set_ylabel("Predicted Target")
-                ax_cat_ice.set_title("Categorical ICE")
-            else:
-                if nrows == 2:
-                    for j in range(ncols):
-                        axes[1, j].axis("off")
+            # (2) Residual plot: errors (true - predicted) vs. predicted.
+            residuals = y_test - pred_mean
+            axs[1].scatter(pred_mean, residuals, alpha=0.6)
+            axs[1].axhline(0, color="k", linestyle="--", lw=2)
+            axs[1].set_xlabel("Predicted")
+            axs[1].set_ylabel("Residuals")
+            axs[1].set_title("Residual Plot")
 
             plt.tight_layout()
             plt.show()
+
+    def _visualize_binary(
+        self, X_test, y_test, rng_key, posterior="logits", num_samples=None
+    ):
+        """
+        Visualizes binary classification predictions by showing:
+          1. A histogram of predicted probabilities.
+          2. The ROC curve (with AUC).
+          3. A calibration plot.
+
+        Parameters:
+            X_test (np.ndarray): Test input data.
+            y_test (np.ndarray): True binary labels (0 or 1).
+            rng_key: Random key for sampling predictions.
+            posterior (str): Which posterior to use (default: 'logits').
+            num_samples (int): Number of samples to draw from the predictive distribution.
+        """
+        # Obtain predictive samples (assumed shape: [num_samples, n_data])
+        preds = self.predict(
+            X_test, rng_key, posterior=posterior, num_samples=num_samples
+        )
+        preds = np.array(preds)
+
+        # Transform logits to probabilities via the sigmoid function
+        # (Assuming that the predict method returns logits for binary classification)
+        preds_prob = jax.nn.sigmoid(preds)
+        preds_prob = np.array(preds_prob)
+        pred_mean_prob = np.mean(preds_prob, axis=0)
+
+        # Compute ROC curve and AUC
+        fpr, tpr, _ = roc_curve(y_test, pred_mean_prob)
+        roc_auc = auc(fpr, tpr)
+
+        # Create a figure with three subplots
+        fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+
+        # (1) Histogram of predicted probabilities
+        axs[0].hist(
+            pred_mean_prob, bins=20, color="skyblue", edgecolor="black", alpha=0.8
+        )
+        axs[0].set_title("Histogram of Predicted Probabilities")
+        axs[0].set_xlabel("Predicted Probability")
+        axs[0].set_ylabel("Frequency")
+
+        # (2) ROC Curve
+        axs[1].plot(
+            fpr, tpr, color="darkred", lw=2, label=f"ROC curve (AUC = {roc_auc:.2f})"
+        )
+        axs[1].plot([0, 1], [0, 1], color="gray", lw=2, linestyle="--")
+        axs[1].set_xlim([0.0, 1.0])
+        axs[1].set_ylim([0.0, 1.05])
+        axs[1].set_xlabel("False Positive Rate")
+        axs[1].set_ylabel("True Positive Rate")
+        axs[1].set_title("Receiver Operating Characteristic")
+        axs[1].legend(loc="lower right")
+
+        # (3) Calibration Curve
+        prob_true, prob_pred = calibration_curve(y_test, pred_mean_prob, n_bins=10)
+        axs[2].plot(
+            prob_pred, prob_true, marker="o", linewidth=1, label="Calibration curve"
+        )
+        axs[2].plot([0, 1], [0, 1], linestyle="--", label="Perfect calibration")
+        axs[2].set_xlabel("Mean Predicted Probability")
+        axs[2].set_ylabel("Fraction of Positives")
+        axs[2].set_title("Calibration Plot")
+        axs[2].legend()
+
+        plt.suptitle("Binary Classification Visualizations")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+    def _visualize_multiclass(
+        self, X_test, y_test, rng_key, posterior="logits", num_samples=None
+    ):
+        """
+        Visualizes multiclass classification predictions by showing:
+          1. A confusion matrix.
+          2. A bar chart of average predicted probabilities per class.
+
+        Parameters:
+            X_test (np.ndarray): Test input data.
+            y_test (np.ndarray): True labels (as integers 0, 1, ..., num_classes-1).
+            rng_key: Random key for sampling predictions.
+            posterior (str): Which posterior to use (default: 'logits').
+            num_samples (int): Number of samples to draw from the predictive distribution.
+        """
+        # Obtain predictive samples (assumed shape: [num_samples, n_data, n_classes])
+        preds = self.predict(
+            X_test, rng_key, posterior=posterior, num_samples=num_samples
+        )
+        preds = np.array(preds)
+
+        # Compute the predictive mean logits and then convert to probabilities using softmax
+        pred_mean_logits = np.mean(preds, axis=0)  # Shape: [n_data, n_classes]
+        pred_mean_probs = jax.nn.softmax(pred_mean_logits, axis=-1)
+        # Predicted classes are the argmax over the probability dimension
+        pred_classes = np.argmax(pred_mean_probs, axis=-1)
+
+        # Compute the confusion matrix
+        cm = confusion_matrix(y_test, pred_classes)
+
+        # Create a figure with two subplots
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+
+        # (1) Confusion Matrix (using seaborn heatmap)
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=axs[0])
+        axs[0].set_xlabel("Predicted")
+        axs[0].set_ylabel("True")
+        axs[0].set_title("Confusion Matrix")
+
+        # (2) Average Predicted Probabilities per Class
+        num_classes = pred_mean_probs.shape[1]
+        avg_probs = np.mean(pred_mean_probs, axis=0)
+        axs[1].bar(
+            range(num_classes), avg_probs, color="mediumseagreen", edgecolor="black"
+        )
+        axs[1].set_xlabel("Class")
+        axs[1].set_ylabel("Average Predicted Probability")
+        axs[1].set_title("Average Predicted Probabilities")
+        axs[1].set_xticks(range(num_classes))
+        axs[1].set_xticklabels([f"Class {i}" for i in range(num_classes)])
+
+        plt.suptitle("Multiclass Classification Visualizations")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
 
     def _visualize_image_segmentation(self, X, y=None, posterior: str = "logits"):
         """
@@ -1004,40 +586,6 @@ class Module:
 
         plt.tight_layout()
         plt.show()
-
-    def visualize_fourier_spectrum(layer_obj, show=True):
-        """
-        After the model is fit, perform a forward pass so that the layer's Fourier coefficients
-        are computed and stored. Then, automatically detect whether the layer is a single circulant
-        or a block circulant one and call the corresponding visualization functions.
-
-        For a single circulant layer, get_fourier_coeffs() returns a 1D jnp.array of shape (n,).
-        For a block circulant layer, get_fourier_coeffs() returns a 3D jnp.array of shape
-        (k_out, k_in, block_size).
-
-        Returns:
-            Tuple of matplotlib figure objects.
-        """
-        fft_full = layer_obj.get_fourier_coeffs()  # jnp.array
-
-        # Convert to host (NumPy) if necessary
-        fft_full_host = jax.device_get(fft_full)
-
-        if fft_full_host.ndim == 1:
-            # Single circulant version.
-            fig1 = plot_fft_spectrum(fft_full_host, show=False)
-            fig2 = visualize_circulant_kernel(fft_full_host, show=False)
-        elif fft_full_host.ndim == 3:
-            # Block circulant version.
-            fig1 = plot_block_fft_spectra(fft_full_host, show=False)
-            fig2 = visualize_block_circulant_kernels(fft_full_host, show=False)
-        else:
-            raise ValueError("Unexpected shape for Fourier coefficients.")
-
-        if show:
-            plt.show()
-
-        return fig1, fig2
 
     def save_params(self, file_path):
         """
