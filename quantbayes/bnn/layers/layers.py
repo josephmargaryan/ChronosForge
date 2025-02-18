@@ -634,19 +634,23 @@ class SmoothTruncCirculantLayer:
 
     The prior distribution for each Fourier coefficient is defined via a callable `prior_fn` that takes 
     a scale (or array of scales) and returns a distribution (default: Gaussian).
-    
-    If `alpha` is set to None, a prior is placed on it (default: LogNormal(0, 1)).
+
+    If `alpha` is set to None, a prior is placed on it. You can define a custom prior on alpha via 
+    the `alpha_prior` argument (default: Gamma(2.0, 1.0)).
     """
     def __init__(
         self,
         in_features: int,
         alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
+        alpha_prior=None,    # custom prior for alpha (if alpha is None)
         K: int = None,
         name: str = "smooth_trunc_circ",
         prior_fn=None,  # callable to return a distribution given a scale
     ):
         self.in_features = in_features
         self.alpha = alpha
+        # Use a custom prior for alpha if provided; otherwise default to Gamma(2.0, 1.0)
+        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
         self.name = name
         self.k_half = in_features // 2 + 1  # number of independent coefficients
 
@@ -658,9 +662,9 @@ class SmoothTruncCirculantLayer:
         self._last_fft_full = None  # will store the full FFT after forward pass
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
-        # If alpha is None, sample it from a LogNormal prior (or any other prior you choose).
+        # If alpha is None, sample it from the provided alpha prior.
         alpha = (
-            numpyro.sample(f"{self.name}_alpha", dist.LogNormal(0.0, 1.0))
+            numpyro.sample(f"{self.name}_alpha", self.alpha_prior)
             if self.alpha is None
             else self.alpha
         )
@@ -733,14 +737,16 @@ class SmoothTruncBlockCirculantLayer:
     with frequency-dependent prior scale and optional truncation. Vectorized for faster sampling.
 
     A custom prior on the Fourier coefficients can be specified via `prior_fn` (default: Gaussian).
-    If `alpha` is None, a prior is placed on it (default: LogNormal(0, 1)).
+    If `alpha` is None, a prior is placed on it. You can define a custom prior on alpha via the 
+    `alpha_prior` argument (default: Gamma(2.0, 1.0)).
     """
     def __init__(
         self,
         in_features: int,
         out_features: int,
         block_size: int,
-        alpha: float = 1.0,  # if None, sample alpha via prior
+        alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
+        alpha_prior=None,    # custom prior for alpha (if alpha is None)
         K: int = None,
         name: str = "smooth_trunc_block_circ",
         prior_fn=None,  # callable to return a distribution given a scale
@@ -749,6 +755,7 @@ class SmoothTruncBlockCirculantLayer:
         self.out_features = out_features
         self.block_size = block_size
         self.alpha = alpha
+        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
         self.name = name
 
         self.k_in = (in_features + block_size - 1) // block_size
@@ -767,13 +774,12 @@ class SmoothTruncBlockCirculantLayer:
             X = X[None, :]
         bs, d_in = X.shape
 
-        # If alpha is None, sample it
+        # If alpha is None, sample it using the provided alpha prior.
         alpha = (
-            numpyro.sample(f"{self.name}_alpha", dist.LogNormal(0.0, 1.0))
+            numpyro.sample(f"{self.name}_alpha", self.alpha_prior)
             if self.alpha is None
             else self.alpha
         )
-
         # Frequency-dependent scale.
         freq_idx = jnp.arange(self.k_half)
         prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**alpha)
@@ -855,6 +861,7 @@ class SmoothTruncBlockCirculantLayer:
         if self._last_block_fft is None:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
+
 
 
 class ParticleLinear:
