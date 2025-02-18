@@ -6,6 +6,8 @@ from .efficient_circulant import EfficientCirculantLinear
 from .block_circ_direct_prior import BlockFFTDirectPrior
 from .smooth_trunc_block import SmoothTruncEquinoxBlockCirculant
 from .smooth_trunc_circ import SmoothTruncEquinoxCirculant
+from .fourier_prior import FourierPriorCirculant
+from .block_fourier_prior import BlockFourierCirculant
 
 __all__ = [
     "CirculantLinear",
@@ -18,4 +20,6 @@ __all__ = [
     "BlockFFTDirectPrior",
     "SmoothTruncEquinoxCirculant",
     "SmoothTruncEquinoxBlockCirculant",
+    "FourierPriorCirculant",
+    "BlockFourierCirculant",
 ]

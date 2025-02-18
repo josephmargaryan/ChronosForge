@@ -2024,57 +2024,52 @@ class LSTM:
 class GaussianProcessLayer:
     """
     Implements a Gaussian Process (GP) layer with a Radial Basis Function (RBF) kernel.
-
     This layer computes the covariance matrix (kernel) based on the input data and
     learnable parameters: length scale, variance, and noise.
     """
 
     def __init__(self, input_dim: int, name: str = "gp_layer"):
-        """
-        Initialize the Gaussian Process layer.
-
-        :param input_dim: int
-            Dimensionality of the input features.
-        :param name: str, optional
-            Name of the GP layer, used for parameter naming (default: "gp_layer").
-        """
         self.input_dim = input_dim
         self.name = name
+        # Initialize attributes to None; they'll be set in __call__
+        self.noise = None
+        self.length_scale = None
+        self.variance = None
 
-    def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
-        """
-        Perform the forward pass to compute the GP kernel matrix.
-
-        :param X: jnp.ndarray
-            Input data of shape `(num_points, input_dim)`, where `num_points` is
-            the number of data points, and `input_dim` is the feature dimension.
-
-        :returns: jnp.ndarray
-            Covariance matrix (kernel) of shape `(num_points, num_points)`, representing
-            pairwise relationships between input data points.
-        """
-        length_scale = numpyro.param(
+    def __call__(self, X: jnp.ndarray, X2: jnp.ndarray = None) -> jnp.ndarray:
+        # Retrieve kernel parameters (and store them for later use)
+        self.length_scale = numpyro.param(
             f"{self.name}_length_scale",
             jnp.array(1.0),
             constraint=dist.constraints.positive,
         )
-        variance = numpyro.param(
+        self.variance = numpyro.param(
             f"{self.name}_variance",
             jnp.array(1.0),
             constraint=dist.constraints.positive,
         )
-        noise = numpyro.param(
+        self.noise = numpyro.param(
             f"{self.name}_noise", jnp.array(1.0), constraint=dist.constraints.positive
         )
 
-        pairwise_sq_dists = (
-            jnp.sum(X**2, axis=-1, keepdims=True)
-            - 2 * jnp.dot(X, X.T)
-            + jnp.sum(X**2, axis=-1)
-        )
-        kernel = variance * jnp.exp(-0.5 * pairwise_sq_dists / length_scale**2)
+        # If X2 is not provided, we compute K(X, X)
+        if X2 is None:
+            X2 = X
 
-        return kernel + noise * jnp.eye(X.shape[0])
+        # Compute squared distances: ||x - x'||^2 = ||x||^2 + ||x'||^2 - 2x.x'
+        X_sq = jnp.sum(X**2, axis=-1, keepdims=True)  # shape (n, 1)
+        X2_sq = jnp.sum(X2**2, axis=-1, keepdims=True)  # shape (m, 1)
+        pairwise_sq_dists = X_sq - 2 * jnp.dot(X, X2.T) + X2_sq.T
+
+        kernel = self.variance * jnp.exp(
+            -0.5 * pairwise_sq_dists / (self.length_scale**2)
+        )
+
+        # Add noise only if we're computing the full covariance matrix
+        if X is X2:
+            kernel = kernel + self.noise * jnp.eye(X.shape[0])
+
+        return kernel
 
 
 class VariationalLayer:
