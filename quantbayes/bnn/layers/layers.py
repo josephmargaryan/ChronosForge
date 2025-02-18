@@ -629,69 +629,75 @@ class BlockFFTDirectPriorLayer:
 
 class SmoothTruncCirculantLayer:
     """
-    NumPyro-based circulant layer that places a frequency-dependent Gaussian prior
-    and truncates high frequencies (freq >= K).
-    """
+    NumPyro-based circulant layer that places a frequency-dependent prior on the Fourier coefficients 
+    and truncates high frequencies (freq >= K). 
 
+    The prior distribution for each Fourier coefficient is defined via a callable `prior_fn` that takes 
+    a scale (or array of scales) and returns a distribution (default: Gaussian).
+    
+    If `alpha` is set to None, a prior is placed on it (default: LogNormal(0, 1)).
+    """
     def __init__(
         self,
         in_features: int,
-        alpha: float = 1.0,
+        alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
         K: int = None,
         name: str = "smooth_trunc_circ",
+        prior_fn=None,  # callable to return a distribution given a scale
     ):
         self.in_features = in_features
         self.alpha = alpha
         self.name = name
         self.k_half = in_features // 2 + 1  # number of independent coefficients
 
-        # If K is not provided or is larger than the independent set, use k_half.
         if K is None or K > self.k_half:
             K = self.k_half
         self.K = K
 
-        # We'll store the final fft_full after forward pass.
-        self._last_fft_full = None  # shape (in_features,) complex
+        self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
+        self._last_fft_full = None  # will store the full FFT after forward pass
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
-        # (1) Compute frequency indices and frequency-dependent standard deviations.
+        # If alpha is None, sample it from a LogNormal prior (or any other prior you choose).
+        alpha = (
+            numpyro.sample(f"{self.name}_alpha", dist.LogNormal(0.0, 1.0))
+            if self.alpha is None
+            else self.alpha
+        )
+        # Compute frequency indices and frequency-dependent standard deviations.
         freq_indices = jnp.arange(self.k_half)
-        prior_std = 1.0 / jnp.sqrt(1.0 + freq_indices**self.alpha)
+        prior_std = 1.0 / jnp.sqrt(1.0 + freq_indices**alpha)
 
-        # (2) Determine which indices are active (k < K)
-        # (2) Determine active indices statically: the first K indices are active.
+        # Determine active indices: the first K indices are active.
         active_indices = jnp.arange(self.K)  # shape (K,)
         n_active = self.K
 
-        # (3) Sample only for active frequencies.
-        # For inactive frequencies, we'll fill with zeros.
+        # Sample Fourier coefficients for active frequencies using the provided prior function.
+        active_scale = prior_std[active_indices]
         active_real = numpyro.sample(
             f"{self.name}_real",
-            dist.Normal(0.0, prior_std[active_indices]).expand([n_active]).to_event(1),
+            self.prior_fn(active_scale).expand([n_active]).to_event(1),
         )
         active_imag = numpyro.sample(
             f"{self.name}_imag",
-            dist.Normal(0.0, prior_std[active_indices]).expand([n_active]).to_event(1),
+            self.prior_fn(active_scale).expand([n_active]).to_event(1),
         )
 
-        # Create full arrays for real and imaginary parts (length = k_half).
+        # Build full coefficient arrays.
         real_full = jnp.zeros((self.k_half,))
         imag_full = jnp.zeros((self.k_half,))
-
         real_full = real_full.at[active_indices].set(active_real)
         imag_full = imag_full.at[active_indices].set(active_imag)
 
         # Enforce that the DC component is real.
         imag_full = imag_full.at[0].set(0.0)
-        # For even-length vectors, ensure the Nyquist frequency is real.
         if (self.in_features % 2 == 0) and (self.k_half > 1):
             imag_full = imag_full.at[-1].set(0.0)
 
         half_complex = real_full + 1j * imag_full
 
-        # (4) Reconstruct the full FFT coefficients using conjugate symmetry.
+        # Reconstruct the full FFT coefficients via conjugate symmetry.
         if (self.in_features % 2 == 0) and (self.k_half > 1):
-            # For even in_features, Nyquist is the last element of half_complex.
             nyquist = half_complex[-1].real[None]
             fft_full = jnp.concatenate(
                 [half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]]
@@ -701,10 +707,9 @@ class SmoothTruncCirculantLayer:
                 [half_complex, jnp.conjugate(half_complex[1:])[::-1]]
             )
 
-        # Cache for get_fourier_coeffs()
         self._last_fft_full = jax.lax.stop_gradient(fft_full)
 
-        # (5) Multiply: Compute the FFT of the input X, multiply by fft_full, and perform inverse FFT.
+        # Compute output via FFT, multiplication, and inverse FFT.
         if X.ndim == 2:
             X_fft = jnp.fft.fft(X, axis=-1)
             out_fft = X_fft * fft_full[None, :]
@@ -717,29 +722,28 @@ class SmoothTruncCirculantLayer:
         return out_time
 
     def get_fourier_coeffs(self) -> jnp.ndarray:
-        """Return the last-computed full FFT array (complex, length in_features)."""
         if self._last_fft_full is None:
-            raise ValueError(
-                "No Fourier coefficients available. Call the layer on some input first."
-            )
+            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
         return self._last_fft_full
 
 
 class SmoothTruncBlockCirculantLayer:
     """
-    NumPyro-based block-circulant layer. Each b x b block is parameterized
-    by a half-spectrum with freq-dependent prior scale and optional truncation.
-    Now vectorized for faster sampling, similar to BlockFFTDirectPriorLayer.
-    """
+    NumPyro-based block-circulant layer. Each b x b block is parameterized by a half-spectrum 
+    with frequency-dependent prior scale and optional truncation. Vectorized for faster sampling.
 
+    A custom prior on the Fourier coefficients can be specified via `prior_fn` (default: Gaussian).
+    If `alpha` is None, a prior is placed on it (default: LogNormal(0, 1)).
+    """
     def __init__(
         self,
         in_features: int,
         out_features: int,
         block_size: int,
-        alpha: float = 1.0,
+        alpha: float = 1.0,  # if None, sample alpha via prior
         K: int = None,
         name: str = "smooth_trunc_block_circ",
+        prior_fn=None,  # callable to return a distribution given a scale
     ):
         self.in_features = in_features
         self.out_features = out_features
@@ -755,48 +759,54 @@ class SmoothTruncBlockCirculantLayer:
             K = self.k_half
         self.K = K
 
-        # We'll store the final full block-level FFT in this field.
-        self._last_block_fft = None  # shape (k_out, k_in, b) complex
+        self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
+        self._last_block_fft = None  # will store the full block FFT
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         if X.ndim == 1:
             X = X[None, :]
         bs, d_in = X.shape
 
-        # 1) freq-dependent scale
+        # If alpha is None, sample it
+        alpha = (
+            numpyro.sample(f"{self.name}_alpha", dist.LogNormal(0.0, 1.0))
+            if self.alpha is None
+            else self.alpha
+        )
+
+        # Frequency-dependent scale.
         freq_idx = jnp.arange(self.k_half)
-        prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**self.alpha)
-        # Determine active indices statically: the first K indices are active.
-        active_indices = jnp.arange(self.K)  # shape (K,)
+        prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**alpha)
+        active_indices = jnp.arange(self.K)
         n_active = self.K
 
-        # 2) Sample only for active frequencies.
+        # Sample Fourier coefficients for active frequencies.
+        active_scale = prior_std[active_indices]
         active_real = numpyro.sample(
             f"{self.name}_real",
-            dist.Normal(0.0, prior_std[active_indices])
+            self.prior_fn(active_scale)
             .expand([self.k_out, self.k_in, n_active])
             .to_event(3),
         )
         active_imag = numpyro.sample(
             f"{self.name}_imag",
-            dist.Normal(0.0, prior_std[active_indices])
+            self.prior_fn(active_scale)
             .expand([self.k_out, self.k_in, n_active])
             .to_event(3),
         )
 
-        # Create full arrays for real and imaginary parts (shape: (k_out, k_in, k_half))
+        # Build full coefficient arrays for each block.
         real_coeff = jnp.zeros((self.k_out, self.k_in, self.k_half))
         imag_coeff = jnp.zeros((self.k_out, self.k_in, self.k_half))
         real_coeff = real_coeff.at[..., active_indices].set(active_real)
         imag_coeff = imag_coeff.at[..., active_indices].set(active_imag)
 
-        # freq=0 => purely real
+        # Enforce DC component to be real.
         imag_coeff = imag_coeff.at[..., 0].set(0.0)
-        # if b even => freq=b/2 => real
         if (self.b % 2 == 0) and (self.k_half > 1):
             imag_coeff = imag_coeff.at[..., -1].set(0.0)
 
-        # 3) Reconstruct the full b-length array for each (i,j).
+        # Reconstruct the full block-level FFT for each (i,j) block.
         def reconstruct_fft(r_ij, i_ij):
             half_c = r_ij + 1j * i_ij
             if (self.b % 2 == 0) and (self.k_half > 1):
@@ -811,54 +821,37 @@ class SmoothTruncBlockCirculantLayer:
         block_fft_full = jax.vmap(
             lambda Rrow, Irow: jax.vmap(reconstruct_fft)(Rrow, Irow),
             in_axes=(0, 0),
-        )(
-            real_coeff, imag_coeff
-        )  # shape (k_out, k_in, b)
-
-        # stop_gradient store for get_fourier_coeffs
+        )(real_coeff, imag_coeff)
         self._last_block_fft = jax.lax.stop_gradient(block_fft_full)
 
-        # 4) Zero-pad X if needed, reshape
+        # Zero-pad and reshape X into blocks.
         pad_len = self.k_in * self.b - d_in
         if pad_len > 0:
             X = jnp.pad(X, ((0, 0), (0, pad_len)))
         X_blocks = X.reshape(bs, self.k_in, self.b)
 
-        # 5) Multiply in time domain
+        # Multiply in the time domain over the blocks.
         def multiply_blockrow(i):
-            # sum over j => ifft( conj(block_fft_full[i,j]) * fft(X_blocks[:,j,:]) )
             def scan_j(carry, j):
                 w_ij = block_fft_full[i, j]  # shape (b,)
-                x_j = X_blocks[:, j, :]  # shape (bs, b)
+                x_j = X_blocks[:, j, :]      # shape (bs, b)
                 X_fft = jnp.fft.fft(x_j, axis=-1)
                 out_fft = X_fft * jnp.conjugate(w_ij)[None, :]
                 out_time = jnp.fft.ifft(out_fft, axis=-1).real
                 return carry + out_time, None
-
             init = jnp.zeros((bs, self.b))
             out_time, _ = jax.lax.scan(scan_j, init, jnp.arange(self.k_in))
             return out_time
 
-        out_blocks = jax.vmap(multiply_blockrow)(
-            jnp.arange(self.k_out)
-        )  # (k_out, bs, b)
-        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
-            bs, self.k_out * self.b
-        )
-
-        # slice if needed
+        out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(bs, self.k_out * self.b)
         if self.k_out * self.b > self.out_features:
             out_reshaped = out_reshaped[:, : self.out_features]
-
         if X.shape[0] == 1 and bs == 1:
             out_reshaped = out_reshaped[0]
         return out_reshaped
 
     def get_fourier_coeffs(self) -> jnp.ndarray:
-        """
-        Return last-computed block-level FFT array (k_out, k_in, b).
-        This is the full time-domain frequency representation for each block.
-        """
         if self._last_block_fft is None:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
