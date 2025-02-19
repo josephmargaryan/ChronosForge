@@ -4,6 +4,34 @@ import jax
 import jax.numpy as jnp
 import jax.nn
 
+def analyze_pre_activations(X_pre):
+    """
+    Computes and visualizes the empirical covariance matrix from pre-activations.
+
+    Parameters:
+      X_pre: jnp.ndarray of shape (N, in_features)
+
+    Returns:
+      cov_matrix: jnp.ndarray of shape (N, N)
+    """
+    # Compute the empirical covariance matrix (across the data points)
+    # Each row is a data point's feature representation.
+    X_centered = X_pre - X_pre.mean(axis=0)
+    cov_matrix = (X_centered @ X_centered.T) / (X_pre.shape[1] - 1)
+    
+    # Visualize the covariance matrix
+    plt.figure(figsize=(6, 5))
+    plt.imshow(jax.device_get(cov_matrix), cmap="viridis")
+    plt.colorbar()
+    plt.title("Empirical Covariance of Pre-Activations")
+    plt.xlabel("Data Point Index")
+    plt.ylabel("Data Point Index")
+    plt.tight_layout()
+    plt.show()
+    
+    return cov_matrix
+
+
 
 def compute_binary_entropy(probs, eps=1e-8):
     """

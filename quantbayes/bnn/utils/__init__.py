@@ -11,6 +11,7 @@ from .vis_classification import (
     visualize_uncertainty_multiclass,
     visualize_uncertainty_binary,
 )
+from .gp_utils import visualize_gp_kernel, sample_gp_prior, predict_gp, visualize_predictions
 
 __all__ = [
     "EntropyAndMutualInformation",
@@ -22,4 +23,8 @@ __all__ = [
     "evaluate_mcmc",
     "visualize_uncertainty_multiclass",
     "visualize_uncertainty_binary",
+    "visualize_gp_kernel",
+    "sample_gp_prior",
+    "predict_gp",
+    "visualize_predictions"
 ]

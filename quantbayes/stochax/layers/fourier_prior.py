@@ -32,7 +32,7 @@ def plot_fft_spectrum_with_uncertainty(fft_samples, show=True):
     axes[0].fill_between(
         freq_idx, mag_lower, mag_upper, color="blue", alpha=0.3, label="95% CI"
     )
-    axes[0].set_title("FFT Magnitude with Uncertainty")
+    axes[0].set_title("FFT Magnitude")
     axes[0].set_xlabel("Frequency index")
     axes[0].set_ylabel("Magnitude")
     axes[0].legend()
@@ -41,7 +41,7 @@ def plot_fft_spectrum_with_uncertainty(fft_samples, show=True):
     axes[1].fill_between(
         freq_idx, phase_lower, phase_upper, color="green", alpha=0.3, label="95% CI"
     )
-    axes[1].set_title("FFT Phase with Uncertainty")
+    axes[1].set_title("FFT Phase")
     axes[1].set_xlabel("Frequency index")
     axes[1].set_ylabel("Phase (radians)")
     axes[1].legend()
@@ -95,7 +95,7 @@ def visualize_circulant_kernel_with_uncertainty(
         ecolor="lightgray",
         capsize=3,
     )
-    axes[0].set_title("Circulant Kernel (Time Domain) with Uncertainty")
+    axes[0].set_title("Circulant Kernel (Time Domain) K=None")
     axes[0].set_xlabel("Index")
     axes[0].set_ylabel("Amplitude")
 

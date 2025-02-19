@@ -14,8 +14,48 @@ __all__ = [
     "visualize_block_circulant_matrices_with_uncertainty",
     "visualize_circulant_layer",
     "visualize_block_circulant_layer",
+    "analyze_pre_activations"
 ]
 
+def _get_pre_activation(model, X, seed=123):
+    my_rng_key = jr.PRNGKey(seed)
+    with handlers.seed(rng_seed=my_rng_key):
+        pre_activations = model.get_preactivations(X)
+    return pre_activations
+
+def analyze_pre_activations(model, X):
+    """
+    Computes and visualizes the empirical covariance matrix from pre-activations.
+
+    Parameters:
+      X_pre: jnp.ndarray of shape (N, in_features)
+
+    Returns:
+      cov_matrix: jnp.ndarray of shape (N, N)
+    
+    Example usage:
+    Define a function in the class:
+        def get_preactivations(self, X):
+            X_pre = self.fft_layer(X)
+            return jax.lax.stop_gradient(X_pre)
+    """
+    X_pre = _get_pre_activation(model, X)
+    # Compute the empirical covariance matrix (across the data points)
+    # Each row is a data point's feature representation.
+    X_centered = X_pre - X_pre.mean(axis=0)
+    cov_matrix = (X_centered @ X_centered.T) / (X_pre.shape[1] - 1)
+    
+    # Visualize the covariance matrix
+    plt.figure(figsize=(6, 5))
+    plt.imshow(jax.device_get(cov_matrix), cmap="viridis")
+    plt.colorbar()
+    plt.title("Empirical Covariance of Pre-Activations")
+    plt.xlabel("Data Point Index")
+    plt.ylabel("Data Point Index")
+    plt.tight_layout()
+    plt.show()
+    
+    return cov_matrix
 
 def get_fft_full_for_given_params(model, X, param_dict, rng_key=jr.PRNGKey(0)):
     """
@@ -368,8 +408,20 @@ def visualize_block_circulant_matrices_with_uncertainty(
         plt.show()
     return fig
 
+def _get_fft_samples(model, X):
+    posterior_samples = model.get_samples
+    for key, value in posterior_samples.items():
 
-def visualize_circulant_layer(fft_samples: np.ndarray, show=True):
+        # (3) To visualize uncertainty, loop over multiple posterior samples:
+        fft_list = []
+        n_samples = 50
+        for i in range(n_samples):
+            sample_param_dict = {key: value[i] for key, value in posterior_samples.items()}
+            fft_sample = get_fft_full_for_given_params(model, X, sample_param_dict, rng_key=jr.PRNGKey(i))
+            fft_list.append(fft_sample)
+    return np.stack(fft_list, axis=0)
+
+def visualize_circulant_layer(model, X, show=True):
     """
     Visualizes the FFT spectrum (magnitude and phase) and the time-domain circulant kernel.
     If fft_samples has multiple samples, uncertainty (e.g., 95% CI) is shown.
@@ -398,6 +450,7 @@ def visualize_circulant_layer(fft_samples: np.ndarray, show=True):
     # (4) Call the high-level visualization function.
     fig_fft, fig_kernel = visualize_circulant_layer(fft_samples, show=True)
     """
+    fft_samples = _get_fft_samples(model, X)
     # Compute statistics (mean, lower, upper bounds) for FFT spectrum.
     fig1 = plot_fft_spectrum_with_uncertainty(fft_samples, show=False)
 

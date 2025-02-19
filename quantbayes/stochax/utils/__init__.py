@@ -4,6 +4,7 @@ from .viz import (
     get_block_fft_full_for_given_params,
     visualize_circulant_layer,
     visualize_block_circulant_layer,
+    analyze_pre_activations
 )
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "get_block_fft_full_for_given_params",
     "visualize_circulant_layer",
     "visualize_block_circulant_layer",
+    "analyze_pre_activations"
 ]
