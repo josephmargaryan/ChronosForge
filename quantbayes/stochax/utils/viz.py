@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,7 +15,9 @@ __all__ = [
     "visualize_block_circulant_matrices_with_uncertainty",
     "visualize_circulant_layer",
     "visualize_block_circulant_layer",
-    "analyze_pre_activations"
+    "analyze_pre_activations",
+    "visualize_deterministic_fft",
+    "visualize_deterministic_block_fft"
 ]
 
 def _get_pre_activation(model, X, seed=123):
@@ -469,8 +472,7 @@ def visualize_block_circulant_layer(fft_samples_blocks: np.ndarray, show=True):
     Example Usage:
 
     from quantbayes.stochax.utils import get_block_fft_full_for_given_params, visualize_block_circulant_layer
-    # Optionally Trigger the FFT layer's forward pass to update its stored coefficients.
-    _ = net.fft_layer(x)
+
     posterior_samples = model.get_samples
 
     param_dict = {key: value[0] for key, value in posterior_samples.items() if key != "logits"}
@@ -506,3 +508,182 @@ def visualize_block_circulant_layer(fft_samples_blocks: np.ndarray, show=True):
     if show:
         plt.show()
     return fig1, fig2, fig3, fig4
+
+
+
+def visualize_deterministic_fft(layer, X, show=True):
+    """
+    Runs the deterministic FFT layer on X, extracts the Fourier coefficients,
+    and visualizes the magnitude, phase, the 1D reconstructed time-domain kernel,
+    and the 2D circulant matrix (mean circulant kernel).
+    
+    Parameters:
+      layer: the deterministic FFT layer (with a get_fourier_coeffs() method)
+      X: input data (jnp.ndarray) to trigger a forward pass
+      show: bool, if True, displays the plot
+      
+    Returns:
+      fig: the matplotlib figure
+    """
+    # Run a forward pass to update stored Fourier coefficients.
+    _ = layer(X)
+    fft_coeffs = layer.get_fourier_coeffs()  # deterministic coefficients
+    
+    # Compute magnitude and phase
+    mag = jnp.abs(fft_coeffs)
+    phase = jnp.angle(fft_coeffs)
+    
+    # Reconstruct the 1D time-domain kernel via inverse FFT.
+    kernel_time = jnp.fft.ifft(fft_coeffs).real
+    
+    # For the circulant matrix, roll the 1D kernel across rows.
+    n = kernel_time.shape[0]
+    C_mean = jnp.stack([jnp.roll(kernel_time, i) for i in range(n)], axis=0)
+    
+    # Create a figure with 4 subplots.
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    # Top left: Fourier Magnitude
+    axes[0, 0].plot(mag)
+    axes[0, 0].set_title("Magnitude of Fourier Coefficients")
+    axes[0, 0].set_xlabel("Frequency Index")
+    axes[0, 0].set_ylabel("Magnitude")
+    
+    # Top right: Fourier Phase
+    axes[0, 1].plot(phase)
+    axes[0, 1].set_title("Phase of Fourier Coefficients")
+    axes[0, 1].set_xlabel("Frequency Index")
+    axes[0, 1].set_ylabel("Phase (radians)")
+    
+    # Bottom left: Reconstructed 1D Time-Domain Kernel
+    axes[1, 0].plot(kernel_time)
+    axes[1, 0].set_title("Reconstructed 1D Time-Domain Kernel")
+    axes[1, 0].set_xlabel("Index")
+    axes[1, 0].set_ylabel("Amplitude")
+    
+    # Bottom right: Mean Circulant Matrix
+    im = axes[1, 1].imshow(jnp.array(C_mean), cmap="viridis")
+    axes[1, 1].set_title("Mean Circulant Matrix")
+    axes[1, 1].set_xlabel("Index")
+    axes[1, 1].set_ylabel("Index")
+    plt.colorbar(im, ax=axes[1, 1], fraction=0.046, pad=0.04)
+    
+    plt.tight_layout()
+    if show:
+        plt.show()
+    return fig
+
+
+def visualize_deterministic_block_fft(layer, X, show=True):
+    """
+    Runs a forward pass of the block circulant FFT layer on X, extracts the full Fourier coefficients,
+    and visualizes for each block:
+      - Magnitude of Fourier coefficients
+      - Phase of Fourier coefficients
+      - Reconstructed 1D time-domain kernel (via IFFT)
+      - Reconstructed circulant matrix from the 1D kernel.
+    
+    Parameters:
+      layer: The block circulant FFT layer (with a get_fourier_coeffs() method).
+      X: Input data (jnp.ndarray) to trigger a forward pass.
+      show: If True, display the plots.
+    
+    Returns:
+      None.
+    """
+    # Run a forward pass to update the stored Fourier coefficients.
+    _ = layer(X)
+    # Retrieve the full Fourier coefficients.
+    # Expected shape: (k_out, k_in, block_size)
+    fft_coeffs_blocks = layer.get_fourier_coeffs()
+    fft_coeffs_blocks = jnp.array(fft_coeffs_blocks)  # Ensure it's a JAX array
+
+    k_out, k_in, b = fft_coeffs_blocks.shape
+    total_blocks = k_out * k_in
+
+    # For each block, compute magnitude, phase, 1D kernel (via IFFT), and circulant matrix.
+    # We'll create four grids of subplots (one for each visualization type).
+    # Determine grid size (rows, cols) for total_blocks.
+    grid_rows = int(np.ceil(np.sqrt(total_blocks)))
+    grid_cols = int(np.ceil(total_blocks / grid_rows))
+    
+    # Prepare figures:
+    fig_mag, axes_mag = plt.subplots(grid_rows, grid_cols, figsize=(4*grid_cols, 3*grid_rows))
+    fig_phase, axes_phase = plt.subplots(grid_rows, grid_cols, figsize=(4*grid_cols, 3*grid_rows))
+    fig_kernel_1d, axes_kernel_1d = plt.subplots(grid_rows, grid_cols, figsize=(4*grid_cols, 3*grid_rows))
+    fig_circ, axes_circ = plt.subplots(grid_rows, grid_cols, figsize=(4*grid_cols, 3*grid_rows))
+    
+    # Flatten axes arrays for easy indexing.
+    axes_mag = np.array(axes_mag).flatten()
+    axes_phase = np.array(axes_phase).flatten()
+    axes_kernel_1d = np.array(axes_kernel_1d).flatten()
+    axes_circ = np.array(axes_circ).flatten()
+    
+    # Loop over blocks.
+    block_idx = 0
+    for i in range(k_out):
+        for j in range(k_in):
+            # Extract Fourier coefficients for block (i,j): shape (b,)
+            block_fft = fft_coeffs_blocks[i, j, :]
+            
+            # Compute magnitude and phase.
+            mag = jnp.abs(block_fft)
+            phase = jnp.angle(block_fft)
+            
+            # Compute the reconstructed 1D time-domain kernel via inverse FFT.
+            kernel_1d = jnp.fft.ifft(block_fft).real
+            
+            # Compute the circulant matrix: for a circulant matrix,
+            # each row is a rolled version of the 1D kernel.
+            C = jnp.stack([jnp.roll(kernel_1d, shift=k) for k in range(b)], axis=0)
+            
+            # Plot magnitude.
+            ax = axes_mag[block_idx]
+            ax.plot(mag)
+            ax.set_title(f"Block ({i},{j}) Mag")
+            ax.set_xlabel("Freq index")
+            ax.set_ylabel("Magnitude")
+            
+            # Plot phase.
+            ax = axes_phase[block_idx]
+            ax.plot(phase)
+            ax.set_title(f"Block ({i},{j}) Phase")
+            ax.set_xlabel("Freq index")
+            ax.set_ylabel("Phase (rad)")
+            
+            # Plot 1D reconstructed kernel.
+            ax = axes_kernel_1d[block_idx]
+            ax.plot(kernel_1d)
+            ax.set_title(f"Block ({i},{j}) 1D Kernel")
+            ax.set_xlabel("Time index")
+            ax.set_ylabel("Amplitude")
+            
+            # Plot the circulant matrix.
+            ax = axes_circ[block_idx]
+            im = ax.imshow(jnp.array(C), cmap="viridis")
+            ax.set_title(f"Block ({i},{j}) Circulant")
+            ax.set_xlabel("Index")
+            ax.set_ylabel("Index")
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+            block_idx += 1
+    
+    # Hide any extra subplots if total_blocks doesn't fill the grid.
+    for ax in axes_mag[block_idx:]:
+        ax.set_visible(False)
+    for ax in axes_phase[block_idx:]:
+        ax.set_visible(False)
+    for ax in axes_kernel_1d[block_idx:]:
+        ax.set_visible(False)
+    for ax in axes_circ[block_idx:]:
+        ax.set_visible(False)
+    
+    fig_mag.tight_layout()
+    fig_phase.tight_layout()
+    fig_kernel_1d.tight_layout()
+    fig_circ.tight_layout()
+    
+    if show:
+        plt.show()
+    
+    return fig_mag, fig_phase, fig_kernel_1d, fig_circ
