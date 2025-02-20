@@ -2,96 +2,95 @@ import numpy as np
 import pandas as pd
 import logging
 from typing import Optional, List, Dict, Tuple, Union
-from sklearn.preprocessing import (
-    StandardScaler,
-    MinMaxScaler,
-    LabelEncoder,
-    OneHotEncoder,
-)
+
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, OneHotEncoder
 
 
 class Preprocessor:
     """
-    A single Preprocessor class that can handle regression, binary classification,
-    and multiclass classification, based on 'task_type'.
-
-    For classification, optionally encodes the target:
-      - binary -> shape (N,)
-      - multiclass -> shape (N, num_classes) if one-hot
-
-    For regression, keeps target as numeric shape (N,).
-
-    Also handles:
-      - Missing data removal (optional)
-      - Categorical encoding (one-hot)
-      - Numeric scaling
-      - Target scaling (for regression) or encoding (for classification)
+    Enhanced Preprocessor for tabular data that supports regression, binary classification,
+    and multiclass classification. It works with both pandas DataFrames and numpy arrays,
+    can auto-detect categorical/numeric columns if not provided, and supports prediction mode
+    when target values are missing.
 
     Parameters
     ----------
     task_type : str
         One of ["regression", "binary", "multiclass"].
-    target_col : str
-        Name of the target column in the DataFrame.
+    target_col : Optional[str]
+        Name of the target column (if using DataFrame input). For numpy input, if None then target_index must be provided.
     categorical_cols : Optional[List[str]]
-        List of categorical column names.
+        List of categorical column names (for DataFrame input). If None and auto_detect is True, they will be auto-detected.
     numeric_cols : Optional[List[str]]
-        List of numeric column names.
+        List of numeric column names (for DataFrame input). If None and auto_detect is True, they will be auto-detected.
     feature_scaler : Optional[object]
-        Any scikit-learn style scaler (e.g., StandardScaler) for features.
+        A scikit-learn style scaler for features.
     target_scaler : Optional[object]
-        Any scikit-learn style scaler for target (only applies to regression).
+        A scikit-learn style scaler for the target (applies only to regression).
     remove_na : bool
-        Whether to drop rows with any NaN values.
+        Whether to drop rows with any missing values.
+    data_format : str
+        Either "dataframe" or "numpy". Default is "dataframe".
+    column_names : Optional[List[str]]
+        For numpy input, a list of column names to convert the array into a DataFrame.
+    target_index : Optional[int]
+        For numpy input, the index corresponding to the target column (used if target_col is not provided).
+    categorical_indices : Optional[List[int]]
+        For numpy input, indices corresponding to categorical features.
+    numeric_indices : Optional[List[int]]
+        For numpy input, indices corresponding to numeric features.
+    auto_detect : bool
+        If True, auto-detect categorical and numeric columns (if not provided).
     """
-
     def __init__(
         self,
         task_type: str,
-        target_col: str,
+        target_col: Optional[str] = None,
         categorical_cols: Optional[List[str]] = None,
         numeric_cols: Optional[List[str]] = None,
         feature_scaler=None,
         target_scaler=None,
         remove_na: bool = True,
+        data_format: str = "dataframe",
+        column_names: Optional[List[str]] = None,
+        target_index: Optional[int] = None,
+        categorical_indices: Optional[List[int]] = None,
+        numeric_indices: Optional[List[int]] = None,
+        auto_detect: bool = True,
     ):
         self.task_type = task_type.lower()
         if self.task_type not in ["regression", "binary", "multiclass"]:
-            raise ValueError(
-                "task_type must be 'regression', 'binary', or 'multiclass'."
-            )
+            raise ValueError("task_type must be 'regression', 'binary', or 'multiclass'.")
 
         self.target_col = target_col
-        self.categorical_cols = categorical_cols if categorical_cols else []
-        self.numeric_cols = numeric_cols if numeric_cols else []
+        self.categorical_cols = categorical_cols  # May be None
+        self.numeric_cols = numeric_cols          # May be None
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler
         self.remove_na = remove_na
 
-        # Internal placeholders
+        # Additional parameters for numpy input support
+        self.data_format = data_format.lower()
+        self.column_names = column_names
+        self.target_index = target_index
+        self.categorical_indices = categorical_indices
+        self.numeric_indices = numeric_indices
+        self.auto_detect = auto_detect
+
+        # Internal placeholders for fitted scalers/encoders
         self.fitted_feature_scaler = None
-        self.fitted_target_scaler = (
-            None  # Used only if regression & target_scaler != None
-        )
+        self.fitted_target_scaler = None
 
-        # For categorical encoding
-        #   We'll do one-hot encoding for features
         self.fitted_onehot_encoders: Dict[str, OneHotEncoder] = {}
-
-        # For classification target encoding
-        #   - For binary, if not {0,1}, we label-encode to 0,1
-        #   - For multiclass, we label-encode then one-hot
         self.fitted_label_encoder = None
         self.fitted_target_onehot_encoder = None
 
-        # We will store final column order after one-hot encoding
+        # After encoding, track the feature column names
         self.feature_columns_after_encoding: List[str] = []
 
         # Logger setup
         self.logger = logging.getLogger(__name__)
-        logging.basicConfig(
-            format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-        )
+        logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
     def _remove_nans(self, df: pd.DataFrame) -> pd.DataFrame:
         """Remove rows with any NaN values if self.remove_na is True."""
@@ -99,51 +98,31 @@ class Preprocessor:
             na_count_before = df.isna().sum().sum()
             df = df.dropna()
             na_count_after = df.isna().sum().sum()
-            self.logger.info(
-                f"Removed {na_count_before - na_count_after} NaN cells from the DataFrame."
-            )
+            self.logger.info(f"Removed {na_count_before - na_count_after} NaN cells from the DataFrame.")
         return df
 
-    def _encode_categorical_features(
-        self, df: pd.DataFrame, fit: bool = False
-    ) -> pd.DataFrame:
+    def _encode_categorical_features(self, df: pd.DataFrame, fit: bool = False) -> pd.DataFrame:
         """
-        One-hot encode each categorical column with a separate OneHotEncoder.
+        One-hot encode each categorical column using a separate OneHotEncoder.
         """
         for col in self.categorical_cols:
             if col not in df.columns:
-                # If the column is missing, create it with an empty string (or some placeholder).
-                df[col] = ""
-
+                df[col] = ""  # Create missing column with empty strings
             if fit:
                 enc = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
                 encoded_data = enc.fit_transform(df[[col]].astype(str))
                 self.fitted_onehot_encoders[col] = enc
-                self.logger.info(
-                    f"Fitted one-hot encoder on column '{col}'. "
-                    f"Found categories: {enc.categories_}"
-                )
+                self.logger.info(f"Fitted one-hot encoder on column '{col}'. Categories: {enc.categories_}")
             else:
                 enc = self.fitted_onehot_encoders[col]
                 encoded_data = enc.transform(df[[col]].astype(str))
-
-            # Construct the new column names
-            new_col_names = [
-                f"{col}__{cat}"
-                for cat in self.fitted_onehot_encoders[col].categories_[0]
-            ]
-            # Convert to DataFrame
-            encoded_df = pd.DataFrame(
-                encoded_data, columns=new_col_names, index=df.index
-            )
-            # Drop original column
+            new_col_names = [f"{col}__{cat}" for cat in enc.categories_[0]]
+            encoded_df = pd.DataFrame(encoded_data, columns=new_col_names, index=df.index)
             df = pd.concat([df.drop(columns=[col]), encoded_df], axis=1)
         return df
 
-    def _scale_features(self, X, fit: bool = False):
-        """
-        Scale numeric features if self.feature_scaler is provided.
-        """
+    def _scale_features(self, X: np.ndarray, fit: bool = False) -> np.ndarray:
+        """Scale numeric features if self.feature_scaler is provided."""
         if self.feature_scaler is not None:
             if fit:
                 self.fitted_feature_scaler = self.feature_scaler.fit(X)
@@ -155,12 +134,11 @@ class Preprocessor:
     def _process_target(self, y: np.ndarray, fit: bool = False) -> np.ndarray:
         """
         Process (encode/scale) the target based on the task_type.
-        - regression: optional scaling
-        - binary: label-encode if needed (0/1), final shape (N,)
-        - multiclass: label-encode -> one-hot, final shape (N, num_classes)
+        - regression: optionally scales target.
+        - binary: label-encode to 0/1.
+        - multiclass: label-encode then one-hot encode.
         """
         if self.task_type == "regression":
-            # Optionally scale target
             if self.target_scaler is not None:
                 if fit:
                     self.fitted_target_scaler = self.target_scaler.fit(y.reshape(-1, 1))
@@ -168,127 +146,149 @@ class Preprocessor:
                 return y_scaled
             else:
                 return y
-
         elif self.task_type == "binary":
-            # We want y in shape (N,), with 0/1
-            # Let's ensure it is numeric by label-encoding if needed
-            # but only if distinct values > 2 we raise error
             unique_vals = np.unique(y)
             if len(unique_vals) > 2:
-                raise ValueError(
-                    "Binary task has more than 2 unique target values. "
-                    f"Found: {unique_vals}"
-                )
-            # If the target is something like {'yes', 'no'} or {2, 5}, we map to {0, 1}
+                raise ValueError(f"Binary task has more than 2 unique target values: {unique_vals}")
             if fit:
                 self.fitted_label_encoder = LabelEncoder().fit(y)
             y_encoded = self.fitted_label_encoder.transform(y)
             return y_encoded
-
         else:
-            # Multiclass => label-encode -> one-hot => final shape (N, num_classes)
+            # multiclass
             if fit:
                 self.fitted_label_encoder = LabelEncoder().fit(y)
             y_int = self.fitted_label_encoder.transform(y)
-
-            # One-hot the integer classes
             if fit:
-                self.fitted_target_onehot_encoder = OneHotEncoder(
-                    sparse_output=False
-                ).fit(y_int.reshape(-1, 1))
+                self.fitted_target_onehot_encoder = OneHotEncoder(sparse_output=False).fit(y_int.reshape(-1, 1))
             y_ohe = self.fitted_target_onehot_encoder.transform(y_int.reshape(-1, 1))
             return y_ohe
 
-    def fit_transform(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    def _auto_detect_columns(self, df: pd.DataFrame) -> Tuple[List[str], List[str]]:
         """
-        Fit all preprocessing steps using this df as "training data",
-        then transform the df and return (X, y).
-
-        X shape:
-          - after numeric scaling and one-hot encoding of categorical features => (N, D')
-
-        y shape:
-          - if regression or binary => (N,)
-          - if multiclass => (N, num_classes)
-
-        Returns
-        -------
-        X_processed, y_processed
+        Automatically detect categorical and numeric columns.
+        - Columns with object or category dtype are considered categorical.
+        - Numeric columns with fewer than 10 unique values are also considered categorical.
         """
-        df = df.copy()
+        cat_cols = []
+        num_cols = []
+        for col in df.columns:
+            if col == self.target_col:
+                continue
+            if df[col].dtype == 'object' or str(df[col].dtype).startswith('category'):
+                cat_cols.append(col)
+            elif pd.api.types.is_numeric_dtype(df[col]):
+                if df[col].nunique() < 10:
+                    cat_cols.append(col)
+                else:
+                    num_cols.append(col)
+            else:
+                cat_cols.append(col)
+        return cat_cols, num_cols
 
-        # Remove any missing data
+    def _prepare_dataframe(self, data: Union[pd.DataFrame, np.ndarray]) -> pd.DataFrame:
+        """
+        If data is a numpy array and data_format is "numpy", convert it to a DataFrame using self.column_names.
+        """
+        if isinstance(data, np.ndarray):
+            if self.column_names is None:
+                raise ValueError("For numpy input, you must provide column_names.")
+            data = pd.DataFrame(data, columns=self.column_names)
+        return data.copy()
+
+    def fit_transform(self, data: Union[pd.DataFrame, np.ndarray]) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Fit all preprocessing steps using the provided training data and transform it.
+        If target values are missing, y is returned as None.
+        Returns:
+            X_processed (np.ndarray): Processed feature matrix.
+            y_processed (np.ndarray or None): Processed target vector/array.
+        """
+        df = self._prepare_dataframe(data)
         df = self._remove_nans(df)
 
-        # One-hot encode categorical features
+        # If using numpy input and target_col is not given, set it from target_index.
+        if self.data_format == "numpy" and self.target_col is None:
+            if self.target_index is None:
+                raise ValueError("For numpy input, either target_col or target_index must be provided.")
+            self.target_col = self.column_names[self.target_index]
+
+        # If categorical/numeric columns are not provided and auto_detect is True, then auto-detect.
+        if self.auto_detect:
+            if (self.categorical_cols is None or self.numeric_cols is None):
+                auto_cat, auto_num = self._auto_detect_columns(df)
+                if self.categorical_cols is None:
+                    self.categorical_cols = auto_cat
+                if self.numeric_cols is None:
+                    self.numeric_cols = auto_num
+
+        # For numpy input, if categorical_indices/numeric_indices are provided, override the above.
+        if self.data_format == "numpy":
+            if self.categorical_indices is not None:
+                self.categorical_cols = [self.column_names[i] for i in self.categorical_indices]
+            if self.numeric_indices is not None:
+                self.numeric_cols = [self.column_names[i] for i in self.numeric_indices]
+
+        # Ensure target_col exists
+        if self.target_col not in df.columns:
+            raise ValueError(f"Target column '{self.target_col}' not found in data.")
+
+        # One-hot encode categorical features (fit mode)
         df = self._encode_categorical_features(df, fit=True)
 
-        # Keep track of which columns are features vs. target
-        #   after encoding, numeric_cols might have changed. We'll retrieve them from df minus target col
+        # Store final feature column names (all columns except target)
         all_columns = df.columns.tolist()
-        if self.target_col not in all_columns:
-            raise ValueError(
-                f"Target column '{self.target_col}' not found in DataFrame."
-            )
-        self.feature_columns_after_encoding = [
-            c for c in all_columns if c != self.target_col
-        ]
+        self.feature_columns_after_encoding = [c for c in all_columns if c != self.target_col]
 
-        # Separate X, y
+        # Separate features and target
         X = df[self.feature_columns_after_encoding].values
-        y = df[self.target_col].values
+        y = df[self.target_col].values if self.target_col in df.columns else None
 
-        # Scale features
         X_scaled = self._scale_features(X, fit=True)
-        # Process target
-        y_processed = self._process_target(y, fit=True)
+        y_processed = self._process_target(y, fit=True) if y is not None else None
 
         return X_scaled, y_processed
 
-    def transform(self, df: pd.DataFrame) -> Tuple[np.ndarray, Union[np.ndarray, None]]:
+    def transform(self, data: Union[pd.DataFrame, np.ndarray], prediction_mode: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
-        Transform new data (i.e., test / validation) using the previously fitted transformations.
-
-        Returns X, y where:
-          - y might be None if target_col doesn't exist in df
-          - otherwise y is processed similarly to fit_transform
+        Transform new data using the fitted preprocessing steps.
+        If prediction_mode is True, target values are not expected and y_processed will be None.
+        Returns:
+            X_processed (np.ndarray): Processed feature matrix.
+            y_processed (np.ndarray or None): Processed target (if available and prediction_mode is False).
         """
-        df = df.copy()
-
-        # If target is missing, we add a placeholder column
-        has_target = self.target_col in df.columns
-        if not has_target:
-            df[self.target_col] = np.nan  # dummy
-
-        # Remove NA if desired
+        df = self._prepare_dataframe(data)
         df = self._remove_nans(df)
 
-        # One-hot encode categorical features
-        #   (we do NOT fit again)
+        # If not in prediction mode and target_col is missing, add a placeholder column.
+        has_target = self.target_col in df.columns
+        if not prediction_mode and not has_target:
+            raise ValueError("Target column is missing in the data and prediction_mode is False.")
+        elif prediction_mode and not has_target:
+            # For prediction, we simply continue without processing target.
+            self.logger.info("Prediction mode: target column not found; only transforming features.")
+
+        # If categorical_cols were auto-detected during training, ensure they exist in new data.
         for col in self.categorical_cols:
             if col not in df.columns:
                 df[col] = ""
+
         df = self._encode_categorical_features(df, fit=False)
 
-        # Make sure all feature columns exist
+        # Make sure all feature columns exist (create missing ones as zeros)
         for col in self.feature_columns_after_encoding:
             if col not in df.columns:
-                # if missing, create zero column
                 df[col] = 0
 
-        # Reorder columns so that feature columns are consistent
-        #   (some columns may appear in a different order after concatenation)
-        df = df[self.feature_columns_after_encoding + [self.target_col]]
+        # Reorder columns to match training
+        target_list = [self.target_col] if self.target_col in df.columns else []
+        df = df[self.feature_columns_after_encoding + target_list]
 
-        # Separate X, y
         X = df[self.feature_columns_after_encoding].values
-        y = df[self.target_col].values
-
-        # Scale features
         X_scaled = self._scale_features(X, fit=False)
 
-        # Process target (only if it exists)
-        if has_target:
+        if not prediction_mode and self.target_col in df.columns:
+            y = df[self.target_col].values
             y_processed = self._process_target(y, fit=False)
         else:
             y_processed = None
@@ -296,150 +296,123 @@ class Preprocessor:
         return X_scaled, y_processed
 
 
+#############################################
+# Extended Test Cases for the Preprocessor
+#############################################
 if __name__ == "__main__":
-    """
-    Test section:
-      Demonstrates usage for:
-       1) Regression
-       2) Binary classification
-       3) Multiclass classification
-    We'll generate synthetic data for each scenario and show how to use Preprocessor.
-    """
-
     import numpy as np
     import pandas as pd
 
-    # For reproducibility
     np.random.seed(42)
 
-    # -------------------------------------------------
-    # 1) Regression scenario
-    # -------------------------------------------------
+    # ---------------------------
+    # 1) Regression scenario (DataFrame)
+    # ---------------------------
     N = 100
-    df_reg = pd.DataFrame(
-        {
-            "feature1": np.random.randn(N),
-            "feature2": np.random.uniform(0, 100, size=N),
-            "target": np.random.randn(N) * 50 + 10,  # some numeric target
-        }
-    )
-
-    print("=== Regression Demo ===")
+    df_reg = pd.DataFrame({
+        "f1": np.random.randn(N),
+        "f2": np.random.uniform(0, 100, size=N),
+        "target": np.random.randn(N) * 50 + 10,
+    })
+    print("=== Regression (DataFrame) Demo ===")
     preprocessor_reg = Preprocessor(
         task_type="regression",
         target_col="target",
-        categorical_cols=[],  # none in this dataset
-        numeric_cols=["feature1", "feature2"],
+        categorical_cols=[],  # no categorical features provided
+        numeric_cols=["f1", "f2"],
         feature_scaler=StandardScaler(),
         target_scaler=MinMaxScaler(),
         remove_na=True,
+        data_format="dataframe",
+        auto_detect=False  # already provided numeric cols
     )
     X_reg, y_reg = preprocessor_reg.fit_transform(df_reg)
-    print("Shapes:", X_reg.shape, y_reg.shape)
-    print("X_reg (first 5 rows):\n", X_reg[:5])
-    print("y_reg (first 5):\n", y_reg[:5], "\n")
+    print("X_reg shape:", X_reg.shape, "y_reg shape:", y_reg.shape)
+    
+    # Test transform in prediction mode (without target)
+    df_reg_pred = df_reg.drop(columns=["target"])
+    X_reg_pred, y_reg_pred = preprocessor_reg.transform(df_reg_pred, prediction_mode=True)
+    print("Prediction mode (DataFrame) X_reg_pred shape:", X_reg_pred.shape, "y_reg_pred:", y_reg_pred)
 
-    # Simulate "test" or "new" data
-    df_reg_test = pd.DataFrame(
-        {
-            "feature1": np.random.randn(5),
-            "feature2": np.random.uniform(0, 100, size=5),
-            "target": np.random.randn(5) * 50 + 10,  # some numeric target
-        }
-    )
-    X_reg_test, y_reg_test = preprocessor_reg.transform(df_reg_test)
-    print("X_reg_test shape:", X_reg_test.shape, "y_reg_test shape:", y_reg_test.shape)
-    print("X_reg_test:\n", X_reg_test)
-    print("y_reg_test:\n", y_reg_test, "\n")
-
-    # -------------------------------------------------
-    # 2) Binary classification scenario
-    # -------------------------------------------------
-    N = 100
-    df_bin = pd.DataFrame(
-        {
-            "feature_cat": np.random.choice(["A", "B", "C"], size=N),
-            "feature_num": np.random.randn(N),
-            "target": np.random.choice(["yes", "no"], size=N),  # or could be {0, 1}
-        }
-    )
-
-    print("=== Binary Classification Demo ===")
+    # ---------------------------
+    # 2) Binary classification (DataFrame) with auto-detection
+    # ---------------------------
+    df_bin = pd.DataFrame({
+        "cat_feature": np.random.choice(["A", "B", "C"], size=N),
+        "num_feature": np.random.randn(N),
+        "target": np.random.choice(["yes", "no"], size=N),
+    })
+    print("\n=== Binary Classification (DataFrame) Demo ===")
     preprocessor_bin = Preprocessor(
         task_type="binary",
         target_col="target",
-        categorical_cols=["feature_cat"],
-        numeric_cols=["feature_num"],
+        categorical_cols=None,  # Let auto-detect handle this
+        numeric_cols=None,
         feature_scaler=StandardScaler(),
-        target_scaler=None,  # not used for binary
         remove_na=True,
+        data_format="dataframe",
+        auto_detect=True
     )
     X_bin, y_bin = preprocessor_bin.fit_transform(df_bin)
-    print("Shapes:", X_bin.shape, y_bin.shape)
-    print("X_bin (first 5 rows):\n", X_bin[:5])
-    print("y_bin (first 5):\n", y_bin[:5], "\n")
+    print("X_bin shape:", X_bin.shape, "y_bin shape:", y_bin.shape)
     print("Unique target values after encoding:", np.unique(y_bin))
 
-    # Simulate "new" data
-    df_bin_test = pd.DataFrame(
-        {
-            "feature_cat": np.random.choice(["A", "B", "C"], size=5),
-            "feature_num": np.random.randn(5),
-            "target": np.random.choice(["yes", "no"], size=5),
-        }
-    )
-    X_bin_test, y_bin_test = preprocessor_bin.transform(df_bin_test)
-    print("X_bin_test shape:", X_bin_test.shape, "y_bin_test shape:", y_bin_test.shape)
-    print("X_bin_test:\n", X_bin_test)
-    print("y_bin_test:\n", y_bin_test, "\n")
-
-    # -------------------------------------------------
-    # 3) Multiclass classification scenario
-    # -------------------------------------------------
-    N = 100
-    df_multi = pd.DataFrame(
-        {
-            "feat_a": np.random.randn(N),
-            "feat_b": np.random.uniform(0, 10, size=N),
-            "category": np.random.choice(["X", "Y"], size=N),
-            "target": np.random.choice(["cls1", "cls2", "cls3"], size=N),
-        }
-    )
-
-    print("=== Multiclass Classification Demo ===")
+    # ---------------------------
+    # 3) Multiclass classification (DataFrame)
+    # ---------------------------
+    df_multi = pd.DataFrame({
+        "feat_a": np.random.randn(N),
+        "feat_b": np.random.uniform(0, 10, size=N),
+        "cat_feat": np.random.choice(["X", "Y"], size=N),
+        "target": np.random.choice(["cls1", "cls2", "cls3"], size=N),
+    })
+    print("\n=== Multiclass Classification (DataFrame) Demo ===")
     preprocessor_multi = Preprocessor(
         task_type="multiclass",
         target_col="target",
-        categorical_cols=["category"],
-        numeric_cols=["feat_a", "feat_b"],
+        categorical_cols=None,
+        numeric_cols=None,
         feature_scaler=MinMaxScaler(),
-        target_scaler=None,
         remove_na=True,
+        data_format="dataframe",
+        auto_detect=True
     )
     X_multi, y_multi = preprocessor_multi.fit_transform(df_multi)
-    print("Shapes:", X_multi.shape, y_multi.shape)
-    print("X_multi (first 5 rows):\n", X_multi[:5])
-    print("y_multi (first 5):\n", y_multi[:5], "\n")
-    print("Shape of y_multi:", y_multi.shape, "(should be (N, num_classes)).")
-    print("Sum of first row of y_multi (should be 1):", y_multi[0].sum())
+    print("X_multi shape:", X_multi.shape, "y_multi shape:", y_multi.shape)
+    print("First row of y_multi (one-hot):", y_multi[0])
 
-    # "New" data
-    df_multi_test = pd.DataFrame(
-        {
-            "feat_a": np.random.randn(5),
-            "feat_b": np.random.uniform(0, 10, size=5),
-            "category": np.random.choice(["X", "Y"], size=5),
-            "target": np.random.choice(["cls1", "cls2", "cls3"], size=5),
-        }
+    # ---------------------------
+    # 4) Regression scenario (numpy array input)
+    # ---------------------------
+    # Create synthetic numpy data
+    np_data = np.hstack([
+        np.random.randn(N, 2),  # two numeric features
+        np.random.randn(N, 1)   # target column
+    ])
+    # Define column names for conversion (f1, f2, target)
+    col_names = ["f1", "f2", "target"]
+    print("\n=== Regression (Numpy) Demo ===")
+    preprocessor_np = Preprocessor(
+        task_type="regression",
+        target_col=None,       # not provided as string
+        categorical_cols=None, # will be auto-detected (likely none here)
+        numeric_cols=None,     # auto-detect numeric features
+        feature_scaler=StandardScaler(),
+        target_scaler=MinMaxScaler(),
+        remove_na=True,
+        data_format="numpy",
+        column_names=col_names,
+        target_index=2,        # target is at index 2
+        auto_detect=True
     )
-    X_multi_test, y_multi_test = preprocessor_multi.transform(df_multi_test)
-    print(
-        "X_multi_test shape:",
-        X_multi_test.shape,
-        "y_multi_test shape:",
-        y_multi_test.shape,
-    )
-    print("X_multi_test:\n", X_multi_test)
-    print("y_multi_test:\n", y_multi_test)
+    X_np, y_np = preprocessor_np.fit_transform(np_data)
+    print("X_np shape:", X_np.shape, "y_np shape:", y_np.shape)
+
+    # Test transform in prediction mode for numpy input
+    np_data_pred = np_data[:, :2]  # remove target column
+    # For prediction, we still need to supply the same column names.
+    preprocessor_np.column_names = ["f1", "f2"]  # update column names for prediction mode
+    X_np_pred, y_np_pred = preprocessor_np.transform(np_data_pred, prediction_mode=True)
+    print("Prediction mode (Numpy) X_np_pred shape:", X_np_pred.shape, "y_np_pred:", y_np_pred)
 
     print("\nAll tests completed successfully.")
