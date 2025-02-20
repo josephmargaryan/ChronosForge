@@ -4,7 +4,6 @@ import jax.numpy as jnp
 import jax.random as jr
 import equinox as eqx
 
-
 class BlockCirculantLinear(eqx.Module):
     """
     Equinox module implementing a block-circulant weight matrix:
@@ -67,100 +66,60 @@ class BlockCirculantLinear(eqx.Module):
         object.__setattr__(self, "W", W_init)
         object.__setattr__(self, "D_bernoulli", diag_signs)
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        """
-        Forward pass:
-          - x shape can be (batch, d_in) or (d_in,) [we handle both].
-          - multiply x by the diagonal Bernoulli sign matrix D if used
-          - slice x into blocks of length b
-          - for each block-row i, sum over block-cols j in freq domain
-          - flatten or slice final result to length out_features
-        """
-        # (1) Possibly expand x to (batch, d_in).
-        #     If x.ndim == 1, we treat as single example of shape (1, d_in).
-        if x.ndim == 1:
-            x = x[None, :]  # shape (1, d_in)
-
+    def __call__(self, x: jnp.ndarray, *, key=None, state=None, **kwargs) -> jnp.ndarray:
+        # Check if input is a single sample.
+        single_example = (x.ndim == 1)
+        if single_example:
+            x = x[None, :]  # add batch dimension
+    
         batch_size = x.shape[0]
         d_in = self.in_features
         d_out = self.out_features
         b = self.block_size
         k_in = self.k_in
         k_out = self.k_out
-
-        # (2) Apply the diagonal Bernoulli D to x
-        #     x_d = D_bernoulli * x, broadcast over batch dimension
-        # shape (batch, d_in)
+    
+        # (2) Apply the diagonal Bernoulli D to x.
         x_d = x * self.D_bernoulli[None, :]
-
+    
         # (3) Zero-pad x_d if needed so that it has shape (batch, k_in*b).
         pad_len = k_in * b - d_in
         if pad_len > 0:
             pad_shape = ((0, 0), (0, pad_len))
             x_d = jnp.pad(x_d, pad_shape, mode="constant", constant_values=0.0)
-
+    
         # (4) Reshape into blocks: (batch, k_in, b)
         x_blocks = x_d.reshape(batch_size, k_in, b)
-
-        # We will produce an output array of shape (batch, k_out * b).
-        # Then slice the first d_out columns if needed.
-        # The block-circulant multiplication formula from the paper is:
-
-        #  out[i] = sum_{j=1..k_in} circ(W[i,j]) x_blocks[j]
-        #  each circ(W[i,j]) is an NxN circulant with N=b here.
-
-        # (5) We'll do everything in the frequency domain. Summation is simpler:
-        #   out_fft[i] = sum_j ( RFFT(W[i,j])^* * RFFT(x_blocks[j]) )
-        #
-        #   Then out[i] = IRFFT( out_fft[i] )
-
+    
+        # (5) Do block-circulant multiplication via FFT.
         def one_block_mul(w_ij, x_j):
-            # w_ij: shape (b,) first row of circulant
-            # x_j: shape (batch, b)
-            # We do:
-            #   c = fft(w_ij)  # shape (b,)
-            #   X = fft(x_j, axis=-1)  # shape (batch, b)
-            #   out_fft = c^* * X
-            #   out_time = ifft(out_fft).real   # shape (batch, b)
-            # Return out_time
             c_fft = jnp.fft.fft(w_ij)
             X_fft = jnp.fft.fft(x_j, axis=-1)
             block_fft = X_fft * jnp.conjugate(c_fft)[None, :]
             return jnp.fft.ifft(block_fft, axis=-1).real
-
-        # We’ll accumulate out[i] for i in [0..k_out).
-        # Actually we can do this with a double loop or vectorized approach.
-
-        # shape (k_out, batch, b)
+    
         def compute_blockrow(i):
-            # sum_{j=1..k_in} circ(W[i,j]) x_blocks[:,j]
-            # i.e. do the block-circulant multiplication for row i.
-            # We'll build the sum in freq domain, then IRFFT once at the end.
-            # Or we can do IRFFT block by block and sum in time domain.
-            # Summation in time domain is also fine. We’ll do time domain for clarity.
             def sum_over_j(carry, j):
-                w_ij = self.W[i, j]  # shape (b,)
-                x_j = x_blocks[:, j, :]  # shape (batch, b)
-                block_out = one_block_mul(w_ij, x_j)  # shape (batch, b)
+                w_ij = self.W[i, j]
+                x_j = x_blocks[:, j, :]
+                block_out = one_block_mul(w_ij, x_j)
                 return carry + block_out, None
-
             init = jnp.zeros((batch_size, b))
             out_time, _ = jax.lax.scan(sum_over_j, init, jnp.arange(k_in))
-            return out_time  # shape (batch, b)
-
-        out_blocks = jax.vmap(compute_blockrow)(
-            jnp.arange(k_out)
-        )  # shape (k_out, batch, b)
-        # We want to reorder to (batch, k_out*b).
-        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
-            batch_size, k_out * b
-        )
-
-        # (6) Finally slice to get the first d_out columns if k_out*b > d_out
+            return out_time
+    
+        out_blocks = jax.vmap(compute_blockrow)(jnp.arange(k_out))
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(batch_size, k_out * b)
+    
+        # (6) Slice to get the first d_out columns if needed.
         if k_out * b > d_out:
             out_reshaped = out_reshaped[:, :d_out]
-
-        return out_reshaped  # shape (batch, d_out) if batch_size>1, else (1, d_out)
+    
+        # If we originally had a single sample, remove the batch dimension.
+        if single_example:
+            out_reshaped = out_reshaped[0]
+    
+        return out_reshaped
 
 
 class MyBlockCirculantNet(eqx.Module):

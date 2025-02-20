@@ -2,16 +2,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import numpy as np
-import matplotlib.pyplot as plt
-import numpyro.handlers as handlers
-
-__all__ = [
-    "BlockFFTDirectPrior",
-    "plot_block_fft_spectra",
-    "visualize_block_circulant_kernels",
-    "get_block_fft_full_for_given_params",
-]
 
 
 class BlockFFTDirectPrior(eqx.Module):
@@ -52,39 +42,36 @@ class BlockFFTDirectPrior(eqx.Module):
         object.__setattr__(self, "W_real", real_init)
         object.__setattr__(self, "W_imag", imag_init)
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        if x.ndim == 1:
+    def __call__(self, x: jnp.ndarray, *, key=None, state=None, **kwargs) -> jnp.ndarray:
+        # If a single sample is passed, add a batch dimension.
+        single_example = (x.ndim == 1)
+        if single_example:
             x = x[None, :]
+        
         batch_size, d_in = x.shape
-
         # Zero-pad x so that it fits into an integer number of blocks.
         pad_len = self.k_in * self.block_size - d_in
         if pad_len > 0:
             x = jnp.pad(x, ((0, 0), (0, pad_len)))
         x_blocks = x.reshape(batch_size, self.k_in, self.block_size)
-
-        # This helper reconstructs the full Fourier vector for a given block
+        
         def reconstruct_block_fft(r_ij, im_ij):
             b = self.block_size
             half_complex = r_ij + 1j * im_ij
             if (b % 2 == 0) and (self.k_half > 1):
                 nyquist = half_complex[-1].real[None]
                 block_fft = jnp.concatenate(
-                    [
-                        half_complex[:-1],
-                        nyquist,
-                        jnp.conjugate(half_complex[1:-1])[::-1],
-                    ]
+                    [half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]]
                 )
             else:
                 block_fft = jnp.concatenate(
                     [half_complex, jnp.conjugate(half_complex[1:])[::-1]]
                 )
             return block_fft
-
+    
         Wr = self.W_real
         Wi = self.W_imag
-
+    
         def compute_blockrow(i):
             def fn(carry, j):
                 x_j = x_blocks[:, j, :]  # shape: (batch_size, block_size)
@@ -95,22 +82,25 @@ class BlockFFTDirectPrior(eqx.Module):
                 out_fft = X_fft * jnp.conjugate(block_fft)[None, :]
                 out_time = jnp.fft.ifft(out_fft, axis=-1).real
                 return carry + out_time, None
-
+    
             init = jnp.zeros((batch_size, self.block_size))
             out_time, _ = jax.lax.scan(fn, init, jnp.arange(self.k_in))
             return out_time  # shape: (batch_size, block_size)
-
-        out_blocks = jax.vmap(compute_blockrow)(
-            jnp.arange(self.k_out)
-        )  # (k_out, batch_size, block_size)
+    
+        out_blocks = jax.vmap(compute_blockrow)(jnp.arange(self.k_out))
         out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
             batch_size, self.k_out * self.block_size
         )
-
+    
         if self.k_out * self.block_size > self.out_features:
             out_reshaped = out_reshaped[:, : self.out_features]
-
+    
+        # If we originally had a single sample, remove the batch dimension.
+        if single_example:
+            out_reshaped = out_reshaped[0]
+    
         return out_reshaped
+
 
     def get_fourier_coeffs(self) -> jnp.ndarray:
         """
