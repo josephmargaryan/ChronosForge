@@ -1,5 +1,3 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
