@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -180,89 +180,68 @@ class Module:
 
     def visualize(
         self,
-        X,
-        y=None,
-        rng_key=jax.random.key(235),
-        posterior="logits",
-        num_classes=10,
-        num_samples=None,
-        credible_interval=90,
-    ):
+        X: jnp.ndarray,
+        y: Optional[jnp.ndarray] = None,
+        rng_key: Any = jax.random.PRNGKey(235),
+        posterior: str = "logits",
+        num_samples: Optional[int] = None,
+        credible_interval: float = 90,
+        **kwargs
+    ) -> None:
         """
-        Visualizes model outputs based on the task type.
-
-        For regression, if X contains a single feature, it calls the single-feature
-        visualization. If X contains multiple features, it calls the multi-feature
-        visualization function.
+        Unified visualization method that delegates to task-specific methods.
+        
+        Parameters:
+            X (jnp.ndarray): Input data.
+            y (Optional[jnp.ndarray]): Ground truth labels (if available).
+            rng_key: Random key for sampling.
+            posterior (str): Posterior type to use.
+            num_samples (Optional[int]): Number of samples to draw.
+            credible_interval (float): Credible interval percentage (used in regression).
+            **kwargs: Additional keyword arguments for specialized visualizations.
         """
         if self.task_type == "multiclass":
-            self._visualize_multiclass(
-                X_test=X,
-                y_test=y,
-                rng_key=rng_key,
-                posterior=posterior,
-                num_samples=num_samples,
-            )
+            self._visualize_multiclass(X, y, rng_key, posterior, num_samples)
         elif self.task_type == "binary":
-            self._visualize_binary(
-                X_test=X,
-                y_test=y,
-                rng_key=rng_key,
-                posterior=posterior,
-                num_samples=num_samples,
-            )
+            self._visualize_binary(X, y, rng_key, posterior, num_samples)
         elif self.task_type == "regression":
-            self._visualize_regression(
-                X_test=X,
-                y_test=y,
-                rng_key=rng_key,
-                posterior=posterior,
-                num_samples=num_samples,
-                credible_interval=credible_interval,
-            )
+            self._visualize_regression(X, y, rng_key, posterior, num_samples, credible_interval)
         elif self.task_type == "image_classification":
-            self._visualize_image_classification(X, y, num_classes, posterior)
+            self._visualize_image_classification(X, y, posterior, **kwargs)
         elif self.task_type == "image_segmentation":
-            self._visualize_image_segmentation(X, y, posterior)
+            self._visualize_image_segmentation(X, y, posterior, **kwargs)
         else:
             raise ValueError(f"Unknown task type: {self.task_type}")
 
-    def visualize_image_classification(
+    def _visualize_image_classification(
         self,
-        X,
-        y,
+        X: jnp.ndarray,
+        y: Optional[jnp.ndarray],
         posterior: str = "logits",
         image_size: Optional[int] = None,
         in_channels: Optional[int] = None,
-    ):
+        **kwargs
+    ) -> None:
         """
-        Visualizes predictions for image classification tasks in a general way.
-
-        Args:
+        Visualizes predictions for image classification tasks.
+        
+        Parameters:
             X (jnp.ndarray): Input images (batch_size, channels, height, width)
-                            or preprocessed patches.
-            y (jnp.ndarray): True labels (optional, for comparison).
-            num_classes (int): Number of output classes.
-            predict_fn (callable): A function that takes (X, rng_key, posterior) and returns
-                                posterior samples. For instance, this can be `self.predict`.
-            posterior (str): The posterior to use (default: "logits").
-            image_size (Optional[int]): If X is not 4D, a fallback image size for a placeholder.
-            in_channels (Optional[int]): If X is not 4D, a fallback number of channels for a placeholder.
+            y (Optional[jnp.ndarray]): True labels (if available).
+            posterior (str): Posterior type (default: "logits").
+            image_size (Optional[int]): Fallback image size if X is not 4D.
+            in_channels (Optional[int]): Fallback number of channels if X is not 4D.
+            **kwargs: Additional parameters.
         """
-        # Get predictions from the provided function.
+        # Get predictions and compute mean probabilities.
         pred_samples = self.predict(X, jax.random.PRNGKey(0), posterior=posterior)
-        # Compute mean predictions using softmax.
-        mean_preds = jax.nn.softmax(
-            pred_samples.mean(axis=0), axis=-1
-        )  # [batch_size, num_classes]
-        predicted_classes = jnp.argmax(mean_preds, axis=-1)  # [batch_size]
+        mean_preds = jax.nn.softmax(pred_samples.mean(axis=0), axis=-1)  # [batch_size, num_classes]
+        predicted_classes = jnp.argmax(mean_preds, axis=-1)
 
-        # Set up the visualization grid.
+        # Setup grid for visualization.
         batch_size = X.shape[0]
         rows = int(jnp.ceil(batch_size / 4))
         fig, axes = plt.subplots(rows, 4, figsize=(12, rows * 3))
-
-        # Ensure axes is 2D.
         if rows == 1:
             axes = axes[np.newaxis, :]
 
@@ -271,31 +250,20 @@ class Module:
                 ax.axis("off")
                 continue
 
-            # If input is image data (4D), assume it is in the format (batch, channels, height, width)
             if X.ndim == 4:
-                # Transpose to (height, width, channels) for visualization.
-                img = X[i].transpose(1, 2, 0)
+                img = X[i].transpose(1, 2, 0)  # Convert (batch, channels, height, width) -> (height, width, channels)
             else:
-                # If not, try to use provided image_size and in_channels to create a placeholder.
                 if image_size is not None and in_channels is not None:
                     img = jnp.zeros((image_size, image_size, in_channels))
                 else:
-                    raise ValueError(
-                        "Input X is not 4D and no fallback image_size/in_channels provided."
-                    )
+                    raise ValueError("Input X is not 4D and no fallback image_size/in_channels provided.")
 
             true_label = y[i] if y is not None else None
-            pred_label = predicted_classes[i]
+            pred_label = int(predicted_classes[i])
             pred_probs = mean_preds[i]
 
-            # Display the image.
-            ax.imshow(
-                img.squeeze(),
-                cmap="gray" if (X.ndim == 4 and X.shape[1] == 1) else None,
-            )
+            ax.imshow(img.squeeze(), cmap="gray" if (X.ndim == 4 and X.shape[1] == 1) else None)
             ax.axis("off")
-
-            # Title with prediction and probability.
             title = f"Pred: {pred_label} ({pred_probs[pred_label]:.2f})"
             if y is not None:
                 title += f"\nTrue: {true_label}"
@@ -306,60 +274,47 @@ class Module:
 
     def _visualize_regression(
         self,
-        X_test,
-        y_test,
-        rng_key,
-        posterior="logits",
-        num_samples=None,
-        credible_interval=90,
-    ):
+        X: jnp.ndarray,
+        y: jnp.ndarray,
+        rng_key: Any,
+        posterior: str = "logits",
+        num_samples: Optional[int] = None,
+        credible_interval: float = 90
+    ) -> None:
         """
-        Visualizes regression predictions. For a single feature, it plots the predictive
-        mean and credible interval against the feature (using a line plot). For multiple
-        features, it uses a scatter plot of predicted vs. true values with error bars and
-        also a residual plot.
-
+        Visualizes regression predictions.
+        
+        Depending on the input dimensionality, uses either a line plot with credible intervals
+        (for single-feature data) or a scatter plot with error bars and residual plot (for multi-feature data).
+        
         Parameters:
-            X_test (np.ndarray): Test input data.
-                - For 1D regression, an array of shape (n_samples,) or (n_samples, 1).
-                - For multi-feature regression, an array of shape (n_samples, n_features) where n_features > 1.
-            y_test (np.ndarray): True target values of shape (n_samples,).
+            X (jnp.ndarray): Input features. For 1D regression, shape (n_samples,) or (n_samples, 1);
+                             for multi-feature, shape (n_samples, n_features) with n_features > 1.
+            y (jnp.ndarray): True target values of shape (n_samples,).
             rng_key: Random key for sampling predictions.
-            posterior (str): Which posterior to use (default: 'logits').
-            num_samples (int): Number of samples to draw from the predictive distribution.
-            credible_interval (float): Percentage for the credible interval (e.g., 90 for 90% interval).
+            posterior (str): Posterior type to use.
+            num_samples (Optional[int]): Number of samples to draw.
+            credible_interval (float): Credible interval percentage.
         """
-        # Obtain predictive samples (assumed shape: [num_samples, n_data])
-        preds = self.predict(
-            X_test, rng_key, posterior=posterior, num_samples=num_samples
-        )
-        preds = np.array(preds)  # Ensure we are working with a NumPy array
-
-        # Compute predictive mean and credible intervals (using percentiles)
+        preds = self.predict(X, rng_key, posterior=posterior, num_samples=num_samples)
+        preds = np.array(preds)
         pred_mean = np.mean(preds, axis=0)
         lower_bound = np.percentile(preds, (100 - credible_interval) / 2, axis=0)
         upper_bound = np.percentile(preds, 100 - (100 - credible_interval) / 2, axis=0)
 
-        # Check if we have a single feature (1D) or multiple features
-        if (X_test.ndim == 1) or (X_test.ndim == 2 and X_test.shape[1] == 1):
-            # Single feature: sort by the feature values and create a line plot.
+        # Single-feature regression: line plot.
+        if (X.ndim == 1) or (X.ndim == 2 and X.shape[1] == 1):
             plt.figure(figsize=(10, 6))
-            plt.scatter(X_test, y_test, color="black", label="True values", alpha=0.7)
-            sorted_idx = np.argsort(X_test.flatten())
-            plt.plot(
-                X_test.flatten()[sorted_idx],
-                pred_mean.flatten()[sorted_idx],
-                color="blue",
-                label="Predictive mean",
-                lw=2,
-            )
+            plt.scatter(X, y, color="black", label="True values", alpha=0.7)
+            sorted_idx = np.argsort(X.flatten())
+            plt.plot(X.flatten()[sorted_idx], pred_mean.flatten()[sorted_idx], color="blue", lw=2, label="Predictive mean")
             plt.fill_between(
-                X_test.flatten()[sorted_idx],
+                X.flatten()[sorted_idx],
                 lower_bound.flatten()[sorted_idx],
                 upper_bound.flatten()[sorted_idx],
                 color="blue",
                 alpha=0.2,
-                label=f"{credible_interval}% Credible Interval",
+                label=f"{credible_interval}% Credible Interval"
             )
             plt.xlabel("X")
             plt.ylabel("y")
@@ -367,85 +322,65 @@ class Module:
             plt.legend()
             plt.show()
         else:
-            # Multiple features: use a scatter plot of predicted vs. true values.
+            # Multi-feature regression: scatter plot and residual plot.
             fig, axs = plt.subplots(1, 2, figsize=(14, 6))
-
-            # (1) Scatter plot: predicted vs. true with error bars.
             axs[0].errorbar(
-                pred_mean,
-                y_test,
-                yerr=[y_test - lower_bound, upper_bound - y_test],
-                fmt="o",
-                alpha=0.6,
-                ecolor="gray",
-                capsize=3,
+                pred_mean, y, yerr=[y - lower_bound, upper_bound - y],
+                fmt="o", alpha=0.6, ecolor="gray", capsize=3
             )
-            # 45-degree line for reference.
-            min_val = min(y_test.min(), pred_mean.min())
-            max_val = max(y_test.max(), pred_mean.max())
+            min_val = min(y.min(), pred_mean.min())
+            max_val = max(y.max(), pred_mean.max())
             axs[0].plot([min_val, max_val], [min_val, max_val], "k--", lw=2)
             axs[0].set_xlabel("Predicted")
             axs[0].set_ylabel("True")
             axs[0].set_title("Predicted vs. True Values")
-
-            # (2) Residual plot: errors (true - predicted) vs. predicted.
-            residuals = y_test - pred_mean
+            
+            residuals = y - pred_mean
             axs[1].scatter(pred_mean, residuals, alpha=0.6)
             axs[1].axhline(0, color="k", linestyle="--", lw=2)
             axs[1].set_xlabel("Predicted")
             axs[1].set_ylabel("Residuals")
             axs[1].set_title("Residual Plot")
-
             plt.tight_layout()
             plt.show()
 
     def _visualize_binary(
-        self, X_test, y_test, rng_key, posterior="logits", num_samples=None
-    ):
+        self,
+        X: jnp.ndarray,
+        y: jnp.ndarray,
+        rng_key: Any,
+        posterior: str = "logits",
+        num_samples: Optional[int] = None
+    ) -> None:
         """
-        Visualizes binary classification predictions by showing:
-          1. A histogram of predicted probabilities.
-          2. The ROC curve (with AUC).
-          3. A calibration plot.
-
+        Visualizes binary classification predictions by displaying:
+          1. Histogram of predicted probabilities.
+          2. ROC curve with AUC.
+          3. Calibration plot.
+        
         Parameters:
-            X_test (np.ndarray): Test input data.
-            y_test (np.ndarray): True binary labels (0 or 1).
+            X (jnp.ndarray): Input data.
+            y (jnp.ndarray): True binary labels (0 or 1).
             rng_key: Random key for sampling predictions.
-            posterior (str): Which posterior to use (default: 'logits').
-            num_samples (int): Number of samples to draw from the predictive distribution.
+            posterior (str): Posterior type (default: 'logits').
+            num_samples (Optional[int]): Number of samples to draw.
         """
-        # Obtain predictive samples (assumed shape: [num_samples, n_data])
-        preds = self.predict(
-            X_test, rng_key, posterior=posterior, num_samples=num_samples
-        )
+        preds = self.predict(X, rng_key, posterior=posterior, num_samples=num_samples)
         preds = np.array(preds)
-
-        # Transform logits to probabilities via the sigmoid function
-        # (Assuming that the predict method returns logits for binary classification)
         preds_prob = jax.nn.sigmoid(preds)
         preds_prob = np.array(preds_prob)
         pred_mean_prob = np.mean(preds_prob, axis=0)
 
-        # Compute ROC curve and AUC
-        fpr, tpr, _ = roc_curve(y_test, pred_mean_prob)
+        fpr, tpr, _ = roc_curve(y, pred_mean_prob)
         roc_auc = auc(fpr, tpr)
 
-        # Create a figure with three subplots
         fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-
-        # (1) Histogram of predicted probabilities
-        axs[0].hist(
-            pred_mean_prob, bins=20, color="skyblue", edgecolor="black", alpha=0.8
-        )
+        axs[0].hist(pred_mean_prob, bins=20, color="skyblue", edgecolor="black", alpha=0.8)
         axs[0].set_title("Histogram of Predicted Probabilities")
         axs[0].set_xlabel("Predicted Probability")
         axs[0].set_ylabel("Frequency")
 
-        # (2) ROC Curve
-        axs[1].plot(
-            fpr, tpr, color="darkred", lw=2, label=f"ROC curve (AUC = {roc_auc:.2f})"
-        )
+        axs[1].plot(fpr, tpr, color="darkred", lw=2, label=f"ROC curve (AUC = {roc_auc:.2f})")
         axs[1].plot([0, 1], [0, 1], color="gray", lw=2, linestyle="--")
         axs[1].set_xlim([0.0, 1.0])
         axs[1].set_ylim([0.0, 1.05])
@@ -454,11 +389,8 @@ class Module:
         axs[1].set_title("Receiver Operating Characteristic")
         axs[1].legend(loc="lower right")
 
-        # (3) Calibration Curve
-        prob_true, prob_pred = calibration_curve(y_test, pred_mean_prob, n_bins=10)
-        axs[2].plot(
-            prob_pred, prob_true, marker="o", linewidth=1, label="Calibration curve"
-        )
+        prob_true, prob_pred = calibration_curve(y, pred_mean_prob, n_bins=10)
+        axs[2].plot(prob_pred, prob_true, marker="o", linewidth=1, label="Calibration curve")
         axs[2].plot([0, 1], [0, 1], linestyle="--", label="Perfect calibration")
         axs[2].set_xlabel("Mean Predicted Probability")
         axs[2].set_ylabel("Fraction of Positives")
@@ -470,50 +402,44 @@ class Module:
         plt.show()
 
     def _visualize_multiclass(
-        self, X_test, y_test, rng_key, posterior="logits", num_samples=None
-    ):
+        self,
+        X: jnp.ndarray,
+        y: jnp.ndarray,
+        rng_key: Any,
+        posterior: str = "logits",
+        num_samples: Optional[int] = None
+    ) -> None:
         """
         Visualizes multiclass classification predictions by showing:
           1. A confusion matrix.
           2. A bar chart of average predicted probabilities per class.
-
+        
         Parameters:
-            X_test (np.ndarray): Test input data.
-            y_test (np.ndarray): True labels (as integers 0, 1, ..., num_classes-1).
+            X (jnp.ndarray): Input data.
+            y (jnp.ndarray): True class labels (0, 1, ..., num_classes-1).
             rng_key: Random key for sampling predictions.
-            posterior (str): Which posterior to use (default: 'logits').
-            num_samples (int): Number of samples to draw from the predictive distribution.
+            posterior (str): Posterior type.
+            num_samples (Optional[int]): Number of samples to draw.
         """
-        # Obtain predictive samples (assumed shape: [num_samples, n_data, n_classes])
-        preds = self.predict(
-            X_test, rng_key, posterior=posterior, num_samples=num_samples
-        )
+        preds = self.predict(X, rng_key, posterior=posterior, num_samples=num_samples)
         preds = np.array(preds)
-
-        # Compute the predictive mean logits and then convert to probabilities using softmax
-        pred_mean_logits = np.mean(preds, axis=0)  # Shape: [n_data, n_classes]
+        pred_mean_logits = np.mean(preds, axis=0)
         pred_mean_probs = jax.nn.softmax(pred_mean_logits, axis=-1)
-        # Predicted classes are the argmax over the probability dimension
         pred_classes = np.argmax(pred_mean_probs, axis=-1)
 
-        # Compute the confusion matrix
-        cm = confusion_matrix(y_test, pred_classes)
+        # Compute confusion matrix.
+        from sklearn.metrics import confusion_matrix  # Local import if only needed here
+        cm = confusion_matrix(y, pred_classes)
 
-        # Create a figure with two subplots
         fig, axs = plt.subplots(1, 2, figsize=(14, 6))
-
-        # (1) Confusion Matrix (using seaborn heatmap)
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=axs[0])
         axs[0].set_xlabel("Predicted")
         axs[0].set_ylabel("True")
         axs[0].set_title("Confusion Matrix")
 
-        # (2) Average Predicted Probabilities per Class
         num_classes = pred_mean_probs.shape[1]
         avg_probs = np.mean(pred_mean_probs, axis=0)
-        axs[1].bar(
-            range(num_classes), avg_probs, color="mediumseagreen", edgecolor="black"
-        )
+        axs[1].bar(range(num_classes), avg_probs, color="mediumseagreen", edgecolor="black")
         axs[1].set_xlabel("Class")
         axs[1].set_ylabel("Average Predicted Probability")
         axs[1].set_title("Average Predicted Probabilities")
@@ -524,61 +450,51 @@ class Module:
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
 
-    def _visualize_image_segmentation(self, X, y=None, posterior: str = "logits"):
+    def _visualize_image_segmentation(
+        self,
+        X: jnp.ndarray,
+        y: Optional[jnp.ndarray] = None,
+        posterior: str = "logits",
+        **kwargs
+    ) -> None:
         """
         Visualizes predictions for image segmentation tasks.
-
-        :param X: jnp.ndarray
-            Input images (batch_size, channels, height, width).
-        :param y: jnp.ndarray
-            Ground truth segmentation masks (optional, for comparison).
-        :param num_samples: int
-            Number of posterior samples for uncertainty estimation.
+        
+        Parameters:
+            X (jnp.ndarray): Input images (batch_size, channels, height, width).
+            y (Optional[jnp.ndarray]): Ground truth segmentation masks.
+            posterior (str): Posterior type.
+            **kwargs: Additional keyword arguments.
         """
-        # Predict on input images
-        pred_samples = self.predict(
-            X, jax.random.PRNGKey(0), posterior=posterior
-        )  # [num_samples, batch, 1, H, W]
-        mean_preds = jax.nn.sigmoid(pred_samples.mean(axis=0))  # [batch, 1, H, W]
+        pred_samples = self.predict(X, jax.random.PRNGKey(0), posterior=posterior)
+        mean_preds = jax.nn.sigmoid(pred_samples.mean(axis=0))
         uncertainty = -(
             mean_preds * jnp.log(mean_preds + 1e-9)
             + (1 - mean_preds) * jnp.log(1 - mean_preds + 1e-9)
-        )  # Entropy [batch, 1, H, W]
+        )
 
-        # Visualization
         batch_size = X.shape[0]
         fig, axes = plt.subplots(batch_size, 3, figsize=(15, 5 * batch_size))
-
         if batch_size == 1:
-            axes = axes[np.newaxis, :]  # Ensure axes is always 2D for consistency
+            axes = axes[np.newaxis, :]
 
         for i in range(batch_size):
-            # Original image
-            img = X[i].squeeze()  # (H, W) for visualization
-            pred_mask = mean_preds[i].squeeze()  # (H, W) predicted mask
-            unc_map = uncertainty[i].squeeze()  # (H, W) uncertainty map
+            img = X[i].squeeze()
+            pred_mask = mean_preds[i].squeeze()
+            unc_map = uncertainty[i].squeeze()
 
-            # Ground truth mask (optional)
-            if y is not None:
-                true_mask = y[i].squeeze()
-
-            # Plot original image
             axes[i, 0].imshow(img, cmap="gray")
             axes[i, 0].axis("off")
             axes[i, 0].set_title("Original Image")
 
-            # Plot predicted mask
             axes[i, 1].imshow(pred_mask, cmap="gray")
             axes[i, 1].axis("off")
             axes[i, 1].set_title("Predicted Segmentation")
 
-            # Overlay ground truth on predicted mask (optional)
             if y is not None:
-                axes[i, 1].contour(
-                    true_mask, colors="red", linewidths=1, alpha=0.7, levels=[0.5]
-                )
+                true_mask = y[i].squeeze()
+                axes[i, 1].contour(true_mask, colors="red", linewidths=1, alpha=0.7, levels=[0.5])
 
-            # Plot uncertainty heatmap
             im = axes[i, 2].imshow(unc_map, cmap="viridis")
             axes[i, 2].axis("off")
             axes[i, 2].set_title("Uncertainty (Entropy)")
