@@ -1,11 +1,12 @@
-from .layers.layers import (
+from .layers import (
     Linear,
     FFTLinear,
-    FFTDirectPriorLinear,
     BlockCirculantLayer,
-    SmoothTruncCirculantLayer,
-    SmoothTruncBlockCirculantLayer,
     ParticleLinear,
+    CircKernel,
+    CircKernelBlock,
+    DeepKernelCirc,
+    DeepKerneBlockCirc,
     FFTParticleLinear,
     Conv1d,
     Conv2d,
@@ -22,7 +23,6 @@ from .layers.layers import (
     LSTM,
     GaussianProcessLayer,
     VariationalLayer,
-    BlockFFTDirectPriorLayer,
 )
 from .layers.base import Module
 
@@ -30,11 +30,11 @@ __all__ = [
     "Module",
     "Linear",
     "FFTLinear",
-    "FFTDirectPriorLinear",
     "BlockCirculantLayer",
-    "BlockFFTDirectPriorLayer",
-    "SmoothTruncCirculantLayer",
-    "SmoothTruncBlockCirculantLayer",
+    "CircKernel",
+    "CircKernelBlock",
+    "DeepKernelCirc",
+    "DeepKerneBlockCirc",
     "ParticleLinear",
     "FFTParticleLinear",
     "Conv1d",
