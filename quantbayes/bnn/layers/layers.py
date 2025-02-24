@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
+from numpyro.distributions import transforms
 
 __all__ = [
     "Linear",
@@ -104,8 +105,8 @@ class Linear:
         in_features: int,
         out_features: int,
         name: str = "layer",
-        weight_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape),
-        bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape),
+        weight_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+        bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
     ):
         """
         Initializes the Linear layer.
@@ -178,8 +179,8 @@ class Circulant:
         self,
         in_features: int,
         name: str = "fft_layer",
-        first_row_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape),
-        bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape),
+        first_row_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+        bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
     ):
         """
         Initialize the FFTLinear layer.
@@ -277,65 +278,85 @@ def _block_circulant_matmul(W, x, d_bernoulli=None):
 
 class BlockCirculant:
     """
-    NumPyro-style block-circulant layer:
-      - Samples W of shape (k_out, k_in, b).
-      - Optionally samples a Bernoulli diagonal for input dimension d_in.
-      - Then does block-circulant matmul in the forward pass.
+    NumPyro-style block-circulant layer.
+    
+    This layer:
+      - Samples W with shape (k_out, k_in, b) using a user-specified prior (default is Normal(0,1)).
+      - Optionally samples a Bernoulli diagonal for the input (controlled by use_diag).
+      - Always samples a bias vector (of shape (out_features,)) using a user-specified prior
+        (default is Normal(0,1)).
+      - Performs block-circulant matrix multiplication using FFT.
+    
+    Parameters:
+      in_features: int
+          The overall input dimension.
+      out_features: int
+          The overall output dimension.
+      block_size: int
+          The size b of each circulant block.
+      name: str
+          Name used to tag parameters.
+      W_prior_fn: callable
+          A function that, given a shape, returns a NumPyro distribution for W.
+      use_diag: bool
+          Whether to sample and apply a Bernoulli diagonal to the input. (Default: True)
+      bias_prior_fn: callable
+          A function that, given a shape, returns a NumPyro distribution for the bias.
+          (Default: Normal(0,1))
     """
-
     def __init__(
         self,
         in_features,
         out_features,
         block_size,
         name="block_circ_layer",
-        W_prior_fn=lambda shape: dist.Normal(0, 1).expand(
-            shape
-        ),  # can add .to_event(...)
-        diag_prior_fn=None,  # optional Bernoulli prior
-        bias_prior_fn=None,  # optional bias
+        W_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+        use_diag=True,
+        bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
     ):
         self.in_features = in_features
         self.out_features = out_features
         self.block_size = block_size
         self.name = name
-
-        # We'll define k_in, k_out
+        
+        # Calculate the number of blocks along the input and output dimensions.
         self.k_in = (in_features + block_size - 1) // block_size
         self.k_out = (out_features + block_size - 1) // block_size
 
         self.W_prior_fn = W_prior_fn
-        self.diag_prior_fn = diag_prior_fn
+        self.use_diag = use_diag
         self.bias_prior_fn = bias_prior_fn
+        self.diag_prior = lambda shape: dist.TransformedDistribution(
+                dist.Bernoulli(0.5).expand(shape).to_event(len(shape)),
+                [transforms.AffineTransform(loc=-1.0, scale=2.0)])
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
-        # 1) Sample W
+        # 1) Sample W with shape (k_out, k_in, block_size)
         W = numpyro.sample(
             f"{self.name}_W",
             self.W_prior_fn([self.k_out, self.k_in, self.block_size]),
         )
 
-        # 2) (Optional) sample the Bernoulli diagonal
-        d_bernoulli = None
-        if self.diag_prior_fn is not None:
+        # 2) Sample the Bernoulli diagonal if enabled; otherwise, set to None.
+        if self.use_diag:
             d_bernoulli = numpyro.sample(
                 f"{self.name}_D",
-                self.diag_prior_fn([self.in_features]),
+                self.diag_prior([self.in_features]),
             )
+        else:
+            d_bernoulli = None
 
-        # 3) Do the block-circulant multiplication
+        # 3) Perform the block-circulant multiplication.
         out = _block_circulant_matmul(W, X, d_bernoulli)
 
-        # 4) If we want a bias, we can sample a vector of shape (out_features,)
-        if self.bias_prior_fn is not None:
-            b = numpyro.sample(
-                f"{self.name}_bias",
-                self.bias_prior_fn([self.out_features]),
-            )
-            out = out + b[None, :]
+        # 4) Sample and add the bias.
+        b = numpyro.sample(
+            f"{self.name}_bias",
+            self.bias_prior_fn([self.out_features]),
+        )
+        out = out + b[None, :]
 
-        # 5) Finally, slice if out_features < k_out * block_size
-        #    (some block_size combos might exceed the exact out_features).
+        # 5) If the padded output dimension is larger than out_features, slice it.
         k_out_b = self.k_out * self.block_size
         if k_out_b > self.out_features:
             out = out[:, : self.out_features]
@@ -862,168 +883,163 @@ class FourierNeuralOperator1D:
     """
     A toy 1D Fourier Neural Operator with L "Fourier layers." 
     Each layer:
-      - transforms input to freq domain
-      - does a "spectral mixing" = multiply by trainable complex mask
-      - inverse transform
-      - plus a pointwise linear or MLP
-      - optional nonlinearity
+      - transforms the input to the frequency domain via FFT,
+      - truncates high frequencies by keeping only the first n_modes (and the symmetric tail),
+      - multiplies by a trainable complex mask (implemented via a single real-valued weight vector),
+      - performs the inverse FFT,
+      - then applies a small pointwise MLP with a residual connection.
+      
+    If out_features != in_features, a final linear layer is applied.
     """
     def __init__(self,
-                in_features,
-                out_features=None,
-                n_modes=None,
-                L=2,
-                hidden_dim=16,
-                name="fourier_operator"):
+                 in_features: int,
+                 out_features: int = None,
+                 n_modes: int = None,
+                 L: int = 2,
+                 hidden_dim: int = 16,
+                 name: str = "fourier_operator"):
         """
-        :param in_features: int, the dimension of the 1D input function.
-        :param out_features: int or None. If None, we output same dimension as input. 
-        :param n_modes: how many low-frequency modes we keep. If None, keep all.
-        :param L: number of Fourier layers
-        :param hidden_dim: dimension for a small pointwise linear
-        :param name: str
+        Parameters:
+          in_features: int, the dimension of the input function.
+          out_features: int, the output dimension (default: same as input).
+          n_modes: int, how many low-frequency modes to keep (default: in_features//2).
+          L: int, number of Fourier layers.
+          hidden_dim: int, hidden dimension for the pointwise MLP.
+          name: str, base name for parameter naming.
         """
         self.in_features = in_features
         self.out_features = out_features if out_features is not None else in_features
-        self.n_modes = n_modes if n_modes is not None else in_features//2
+        self.n_modes = n_modes if n_modes is not None else in_features // 2
         self.L = L
         self.hidden_dim = hidden_dim
         self.name = name
-    def __call__(self, X: jnp.ndarray):
-        """
-        Suppose X has shape (batch, in_features).
-        We'll apply L Fourier layers, each of which:
-          - FFT -> truncation -> multiply by complex weight -> iFFT
-          - Add a pointwise linear( X ), maybe with a small hidden. 
-        Then output shape (batch, out_features).
-        """
+
+    def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         if X.ndim == 1:
-            X = X[None,:]
+            X = X[None, :]  # Ensure batched input.
         batch_size, d_in = X.shape
         out = X
-
         for ell in range(self.L):
             out = self._fourier_layer(out, ell)
-
-        # Possibly reduce to out_features with a final linear layer
-        # or just slice if out_features < d_in
         if self.out_features != d_in:
-            # a small linear
-            w = numpyro.sample(f"{self.name}_final_w", dist.Normal(0,1).expand([d_in, self.out_features]))
-            b = numpyro.sample(f"{self.name}_final_b", dist.Normal(0,1).expand([self.out_features]))
+            # Final linear mapping.
+            w = numpyro.sample(f"{self.name}_final_w",
+                               dist.Normal(0, 1)
+                                 .expand([d_in, self.out_features])
+                                 .to_event(2))
+            b = numpyro.sample(f"{self.name}_final_b",
+                               dist.Normal(0, 1)
+                                 .expand([self.out_features])
+                                 .to_event(1))
             out = jnp.dot(out, w) + b
         return out
-    
-    def _fourier_layer(self, x, layer_idx):
-        """
-        One layer of Fourier operator:
-          1) FFT
-          2) Truncate to n_modes
-          3) Multiply by trainable complex mask
-          4) iFFT
-          5) Add or combine with pointwise MLP
-        """
-        # 1) FFT
-        X_fft = jnp.fft.fft(x, axis=-1)  # shape (batch, d_in)
 
-        # 2) Truncate
-        # We'll keep the first +/- n_modes frequencies for a real input's FFT
-        # but we must be consistent with indexing. We'll do a simple slice [0..n_modes], and sym. 
+    def _fourier_layer(self, x: jnp.ndarray, layer_idx: int) -> jnp.ndarray:
+        # 1) FFT along last axis.
+        X_fft = jnp.fft.fft(x, axis=-1)
         n = x.shape[-1]
-        freq_left = self.n_modes
-        freq_right = self.n_modes
-
-        # We'll build a mask or slice:
-        # For a real signal, we might store only half. But let's keep it simple for demonstration:
-        # we sample a complex weight for [2*n_modes] frequencies around 0, ignoring the highest frequencies.
-        # We can store them as a vector of length 2*n_modes or we do a shape [n] with zeros outside.
-        # Let's do shape=[n], but only first and last n_modes are nonzero.
-
+        # 2) Sample spectral weight for the full frequency range.
         w_complex = numpyro.sample(f"{self.name}_layer{layer_idx}_spectral_weight",
-                                   dist.Normal(0,1).expand([n]) )  # real part only for simplicity
-            # For advanced usage, you might store real & imag parts and combine them.
-        # Or do an auto-regressive prior. We'll keep it simple.
-
-        # 3) Multiply
-        # Let's define a mask that zeros out high frequencies
+                                   dist.Normal(0, 1)
+                                     .expand([n])
+                                     .to_event(1))
+        # 3) Build a mask that keeps the first and last n_modes frequencies.
         def make_mask(n, n_modes):
-            # n is even or odd. We'll keep freq bins [0..n_modes-1], and [n-n_modes..n-1].
             mask = jnp.zeros((n,))
             mask = mask.at[:n_modes].set(1.0)
             mask = mask.at[-n_modes:].set(1.0)
             return mask
-
         mask = make_mask(n, self.n_modes)
-        # Our spectral weight is real, let's interpret it as a real amplitude. 
-        # We multiply X_fft by (mask * w_complex). We'll treat them as real multipliers.
-        # Usually you'd keep a separate real and imag part, but let's keep a simple real scale for the entire complex freq bin:
-        spectral_scale = (mask * w_complex)[None,:]  # shape (1,n)
-        X_fft_mod = X_fft * (1.0 + spectral_scale)  # e.g. (batch,n)
-
-        # 4) iFFT
+        spectral_scale = (mask * w_complex)[None, :]  # Broadcast to (1, n)
+        X_fft_mod = X_fft * (1.0 + spectral_scale)
+        # 4) Inverse FFT.
         x_ifft = jnp.fft.ifft(X_fft_mod, axis=-1).real
-
-        # 5) Add a small pointwise MLP. For brevity, do a single linear + nonlinearity:
-        #   x_out = MLP(x_ifft) + x_ifft
-        hidden_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_w", dist.Normal(0,1).expand([self.in_features, self.hidden_dim]))
-        hidden_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_b", dist.Normal(0,1).expand([self.hidden_dim]))
-        out_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_w", dist.Normal(0,1).expand([self.hidden_dim, self.in_features]))
-        out_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_b", dist.Normal(0,1).expand([self.in_features]))
-
+        # 5) Apply a small pointwise MLP with a residual connection.
+        hidden_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_w",
+                                  dist.Normal(0, 1)
+                                    .expand([self.in_features, self.hidden_dim])
+                                    .to_event(2))
+        hidden_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_b",
+                                  dist.Normal(0, 1)
+                                    .expand([self.hidden_dim])
+                                    .to_event(1))
+        out_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_w",
+                               dist.Normal(0, 1)
+                                 .expand([self.hidden_dim, self.in_features])
+                                 .to_event(2))
+        out_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_b",
+                               dist.Normal(0, 1)
+                                 .expand([self.in_features])
+                                 .to_event(1))
         h = jax.nn.relu(jnp.dot(x_ifft, hidden_w) + hidden_b)
         x_mlp = jnp.dot(h, out_w) + out_b
-
-        # Residual
-        x_out = x_mlp + x_ifft
-        return x_out
+        # Residual connection.
+        return x_ifft + x_mlp
     
 class SpectralDenseBlock:
     """
-    1) FFT -> multiply by trainable complex mask -> iFFT
-    2) Dense => Nonlinearity => Dense
-    3) Residual add
+    A block that performs:
+      1) FFT on the input,
+      2) Multiplication by a trainable complex mask (with separate real and imaginary parts),
+      3) Inverse FFT,
+      4) A pointwise dense transformation (linear -> ReLU -> linear),
+      5) And adds a residual connection.
     """
-
-    def __init__(self, in_features, hidden_dim=32, name="spectral_dense_block"):
+    def __init__(self, in_features: int, hidden_dim: int = 32, name: str = "spectral_dense_block"):
         self.in_features = in_features
         self.hidden_dim = hidden_dim
         self.name = name
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         if X.ndim == 1:
-            X = X[None,:]
+            X = X[None, :]
         batch_size, d_in = X.shape
         # 1) FFT
         X_fft = jnp.fft.fft(X, axis=-1)
-        # 2) Sample spectral mask
-        w_real = numpyro.sample(f"{self.name}_fft_w_real", dist.Normal(0,1).expand([d_in]))
-        w_imag = numpyro.sample(f"{self.name}_fft_w_imag", dist.Normal(0,1).expand([d_in]))
+        # 2) Sample Fourier mask components.
+        w_real = numpyro.sample(f"{self.name}_fft_w_real",
+                                dist.Normal(0, 1)
+                                  .expand([d_in])
+                                  .to_event(1))
+        w_imag = numpyro.sample(f"{self.name}_fft_w_imag",
+                                dist.Normal(0, 1)
+                                  .expand([d_in])
+                                  .to_event(1))
         mask_complex = w_real + 1j * w_imag
-        # multiply
-        out_fft = X_fft * mask_complex[None,:]
-        # iFFT
+        # Multiply in frequency domain.
+        out_fft = X_fft * mask_complex[None, :]
+        # 3) Inverse FFT
         x_time = jnp.fft.ifft(out_fft, axis=-1).real
-
-        # 3) Dense => Nonlinearity => Dense
-        w1 = numpyro.sample(f"{self.name}_w1", dist.Normal(0,1).expand([d_in, self.hidden_dim]))
-        b1 = numpyro.sample(f"{self.name}_b1", dist.Normal(0,1).expand([self.hidden_dim]))
-        w2 = numpyro.sample(f"{self.name}_w2", dist.Normal(0,1).expand([self.hidden_dim, d_in]))
-        b2 = numpyro.sample(f"{self.name}_b2", dist.Normal(0,1).expand([d_in]))
-
+        # 4) Apply a pointwise MLP.
+        w1 = numpyro.sample(f"{self.name}_w1",
+                            dist.Normal(0, 1)
+                              .expand([d_in, self.hidden_dim])
+                              .to_event(2))
+        b1 = numpyro.sample(f"{self.name}_b1",
+                            dist.Normal(0, 1)
+                              .expand([self.hidden_dim])
+                              .to_event(1))
+        w2 = numpyro.sample(f"{self.name}_w2",
+                            dist.Normal(0, 1)
+                              .expand([self.hidden_dim, d_in])
+                              .to_event(2))
+        b2 = numpyro.sample(f"{self.name}_b2",
+                            dist.Normal(0, 1)
+                              .expand([d_in])
+                              .to_event(1))
         h = jax.nn.relu(jnp.dot(x_time, w1) + b1)
         x_dense = jnp.dot(h, w2) + b2
-
-        # 4) Residual
+        # 5) Residual connection.
         return x_time + x_dense
+
 
 class ParticleLinear:
     """
     A particle-aware fully connected layer.
 
-    Applies linear transformations to inputs for each particle, with an aggregation step
-    to ensure the output shape matches expectations.
+    Applies linear transformations to inputs for each particle, then aggregates
+    the outputs to yield a (batch_size, out_features) output.
     """
-
     def __init__(
         self,
         in_features: int,
@@ -1031,18 +1047,6 @@ class ParticleLinear:
         name: str = "particle_layer",
         aggregation: str = "mean",
     ):
-        """
-        Initializes the ParticleLinear layer.
-
-        :param in_features: int
-            Number of input features.
-        :param out_features: int
-            Number of output features.
-        :param name: str
-            Layer name for parameter tracking.
-        :param aggregation: str
-            Method to aggregate across particles ('mean', 'sum', etc.).
-        """
         self.in_features = in_features
         self.out_features = out_features
         self.name = name
@@ -1052,31 +1056,32 @@ class ParticleLinear:
         """
         Applies the particle-aware transformation.
 
-        :param X: jnp.ndarray
-            Input array of shape `(particles, batch_size, in_features)`.
-
-        :returns: jnp.ndarray
-            Output array of shape `(batch_size, out_features)`.
+        Expects X of shape (particles, batch_size, in_features).
+        If the particle dimension is missing (i.e. X has shape (batch_size, in_features)),
+        a singleton particle dimension is added.
         """
         if X.ndim == 2:
-            # Add particle dimension if missing
             X = X[jnp.newaxis, ...]  # Shape: (1, batch_size, in_features)
 
         particles = X.shape[0]
+        # Sample weights and biases with full event treatment.
         w = numpyro.sample(
             f"{self.name}_w",
-            dist.Normal(0, 1).expand([particles, self.in_features, self.out_features]),
+            dist.Normal(0, 1)
+                .expand([particles, self.in_features, self.out_features])
+                .to_event(3)  # Treat each particle's weight matrix as a joint variable.
         )
         b = numpyro.sample(
-            f"{self.name}_b", dist.Normal(0, 1).expand([particles, self.out_features])
+            f"{self.name}_b",
+            dist.Normal(0, 1)
+                .expand([particles, self.out_features])
+                .to_event(2)  # Treat each particle's bias vector as a joint variable.
         )
 
-        # Compute output for each particle
-        particle_outputs = (
-            jnp.einsum("pbi,pij->pbj", X, w) + b
-        )  # (particles, batch_size, out_features)
+        # Compute output for each particle.
+        particle_outputs = jnp.einsum("pbi,pij->pbj", X, w) + b  # (particles, batch_size, out_features)
 
-        # Aggregate across particles
+        # Aggregate across particles.
         if self.aggregation == "mean":
             aggregated_output = jnp.mean(particle_outputs, axis=0)
         elif self.aggregation == "sum":
@@ -1093,26 +1098,16 @@ class FFTParticleLinear:
     """
     FFT-based particle-aware linear layer.
 
-    Applies FFT-based linear transformations for each particle using circulant matrices
-    and aggregates the outputs to ensure the final shape matches the expected dimensions.
+    For each particle, samples a circulant matrix parameterized by its first row
+    and a bias vector. Applies FFT-based multiplication and then aggregates
+    across particles.
     """
-
     def __init__(
         self,
         in_features: int,
         name: str = "fft_particle_layer",
         aggregation: str = "mean",
     ):
-        """
-        Initializes the FFTParticleLinear layer.
-
-        :param in_features: int
-            Number of input features (and output features due to circulant matrix property).
-        :param name: str
-            Name of the layer for parameter tracking.
-        :param aggregation: str
-            Method to aggregate across particles ('mean', 'sum', etc.).
-        """
         self.in_features = in_features
         self.name = name
         self.aggregation = aggregation
@@ -1121,45 +1116,36 @@ class FFTParticleLinear:
         """
         Applies the FFT-based particle-aware transformation.
 
-        :param X: jnp.ndarray
-            Input array of shape `(particles, batch_size, in_features)`.
-
-        :returns: jnp.ndarray
-            Output array of shape `(batch_size, in_features)`.
+        Expects X of shape (particles, batch_size, in_features). If missing the
+        particle dimension, it is added.
+        Returns an output of shape (batch_size, in_features).
         """
         if X.ndim == 2:
-            # Add particle dimension if missing
             X = X[jnp.newaxis, ...]  # Shape: (1, batch_size, in_features)
 
         particles = X.shape[0]
-
-        # Sample first rows of circulant matrices and biases for each particle
+        # Sample first rows and biases for each particle with proper event dimensions.
         first_rows = numpyro.sample(
             f"{self.name}_first_rows",
-            dist.Normal(0, 1).expand([particles, self.in_features]),
+            dist.Normal(0, 1)
+                .expand([particles, self.in_features])
+                .to_event(2)  # Each particle's first row is a joint variable.
         )
         biases = numpyro.sample(
             f"{self.name}_biases",
-            dist.Normal(0, 1).expand([particles, self.in_features]),
+            dist.Normal(0, 1)
+                .expand([particles, self.in_features])
+                .to_event(2)  # Each particle's bias vector is a joint variable.
         )
 
-        # Compute FFT-based transformation for each particle
         def fft_particle_transform(p_idx):
-            first_row = first_rows[p_idx]  # Shape: (in_features,)
-            bias = biases[p_idx]  # Shape: (in_features,)
+            first_row = first_rows[p_idx]  # (in_features,)
+            bias = biases[p_idx]           # (in_features,)
+            transformed = _fft_matmul(first_row, X[p_idx])  # (batch_size, in_features)
+            return transformed + bias
 
-            # FFT multiplication for each particle
-            transformed = _fft_matmul(
-                first_row, X[p_idx]
-            )  # Shape: (batch_size, in_features)
-            return transformed + bias  # Shape: (batch_size, in_features)
-
-        # Apply transformation across particles
-        particle_outputs = jax.vmap(fft_particle_transform)(
-            jnp.arange(particles)
-        )  # (particles, batch_size, in_features)
-
-        # Aggregate across particles
+        particle_outputs = jax.vmap(fft_particle_transform)(jnp.arange(particles))
+        # Aggregate across particles.
         if self.aggregation == "mean":
             aggregated_output = jnp.mean(particle_outputs, axis=0)
         elif self.aggregation == "sum":
