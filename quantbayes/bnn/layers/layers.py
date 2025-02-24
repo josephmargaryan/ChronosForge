@@ -5,12 +5,14 @@ import numpyro.distributions as dist
 
 __all__ = [
     "Linear",
-    "FFTLinear",
-    "BlockCirculantLayer",
-    "CircKernel",
-    "CircKernelBlock"
+    "Circulant",
+    "BlockCirculant",
+    "CirculantProcess",
+    "BlockCirculantProcess"
     "DeepKernelCirc",
     "DeepKerneBlockCirc",
+    "FourierNeuralOperator1D",
+    "SpectralDenseBlock",
     "ParticleLinear",
     "FFTParticleLinear",
     "Conv1d",
@@ -164,7 +166,7 @@ def _fft_matmul(first_row: jnp.ndarray, X: jnp.ndarray) -> jnp.ndarray:
     return result
 
 
-class FFTLinear:
+class Circulant:
     """
     FFT-based linear layer for efficient circulant matrix multiplication.
 
@@ -273,7 +275,7 @@ def _block_circulant_matmul(W, x, d_bernoulli=None):
     return out_reshaped
 
 
-class BlockCirculantLayer:
+class BlockCirculant:
     """
     NumPyro-style block-circulant layer:
       - Samples W of shape (k_out, k_in, b).
@@ -342,7 +344,7 @@ class BlockCirculantLayer:
 
 
 
-class CircKernel:
+class CirculantProcess:
     """
     NumPyro-based circulant layer that places a frequency-dependent prior on the Fourier coefficients 
     and truncates high frequencies (freq >= K). 
@@ -446,7 +448,7 @@ class CircKernel:
         return self._last_fft_full
 
 
-class CircKernelBlock:
+class BlockCirculantProcess:
     """
     NumPyro-based block-circulant layer. Each b x b block is parameterized by a half-spectrum 
     with frequency-dependent prior scale and optional truncation. Vectorized for faster sampling.
@@ -856,6 +858,163 @@ class DeepKerneBlockCirc:
             raise ValueError("No Fourier coefficients available. Call the layer first.")
         return self._last_block_fft
 
+class FourierNeuralOperator1D:
+    """
+    A toy 1D Fourier Neural Operator with L "Fourier layers." 
+    Each layer:
+      - transforms input to freq domain
+      - does a "spectral mixing" = multiply by trainable complex mask
+      - inverse transform
+      - plus a pointwise linear or MLP
+      - optional nonlinearity
+    """
+    def __init__(self,
+                in_features,
+                out_features=None,
+                n_modes=None,
+                L=2,
+                hidden_dim=16,
+                name="fourier_operator"):
+        """
+        :param in_features: int, the dimension of the 1D input function.
+        :param out_features: int or None. If None, we output same dimension as input. 
+        :param n_modes: how many low-frequency modes we keep. If None, keep all.
+        :param L: number of Fourier layers
+        :param hidden_dim: dimension for a small pointwise linear
+        :param name: str
+        """
+        self.in_features = in_features
+        self.out_features = out_features if out_features is not None else in_features
+        self.n_modes = n_modes if n_modes is not None else in_features//2
+        self.L = L
+        self.hidden_dim = hidden_dim
+        self.name = name
+    def __call__(self, X: jnp.ndarray):
+        """
+        Suppose X has shape (batch, in_features).
+        We'll apply L Fourier layers, each of which:
+          - FFT -> truncation -> multiply by complex weight -> iFFT
+          - Add a pointwise linear( X ), maybe with a small hidden. 
+        Then output shape (batch, out_features).
+        """
+        if X.ndim == 1:
+            X = X[None,:]
+        batch_size, d_in = X.shape
+        out = X
+
+        for ell in range(self.L):
+            out = self._fourier_layer(out, ell)
+
+        # Possibly reduce to out_features with a final linear layer
+        # or just slice if out_features < d_in
+        if self.out_features != d_in:
+            # a small linear
+            w = numpyro.sample(f"{self.name}_final_w", dist.Normal(0,1).expand([d_in, self.out_features]))
+            b = numpyro.sample(f"{self.name}_final_b", dist.Normal(0,1).expand([self.out_features]))
+            out = jnp.dot(out, w) + b
+        return out
+    
+    def _fourier_layer(self, x, layer_idx):
+        """
+        One layer of Fourier operator:
+          1) FFT
+          2) Truncate to n_modes
+          3) Multiply by trainable complex mask
+          4) iFFT
+          5) Add or combine with pointwise MLP
+        """
+        # 1) FFT
+        X_fft = jnp.fft.fft(x, axis=-1)  # shape (batch, d_in)
+
+        # 2) Truncate
+        # We'll keep the first +/- n_modes frequencies for a real input's FFT
+        # but we must be consistent with indexing. We'll do a simple slice [0..n_modes], and sym. 
+        n = x.shape[-1]
+        freq_left = self.n_modes
+        freq_right = self.n_modes
+
+        # We'll build a mask or slice:
+        # For a real signal, we might store only half. But let's keep it simple for demonstration:
+        # we sample a complex weight for [2*n_modes] frequencies around 0, ignoring the highest frequencies.
+        # We can store them as a vector of length 2*n_modes or we do a shape [n] with zeros outside.
+        # Let's do shape=[n], but only first and last n_modes are nonzero.
+
+        w_complex = numpyro.sample(f"{self.name}_layer{layer_idx}_spectral_weight",
+                                   dist.Normal(0,1).expand([n]) )  # real part only for simplicity
+            # For advanced usage, you might store real & imag parts and combine them.
+        # Or do an auto-regressive prior. We'll keep it simple.
+
+        # 3) Multiply
+        # Let's define a mask that zeros out high frequencies
+        def make_mask(n, n_modes):
+            # n is even or odd. We'll keep freq bins [0..n_modes-1], and [n-n_modes..n-1].
+            mask = jnp.zeros((n,))
+            mask = mask.at[:n_modes].set(1.0)
+            mask = mask.at[-n_modes:].set(1.0)
+            return mask
+
+        mask = make_mask(n, self.n_modes)
+        # Our spectral weight is real, let's interpret it as a real amplitude. 
+        # We multiply X_fft by (mask * w_complex). We'll treat them as real multipliers.
+        # Usually you'd keep a separate real and imag part, but let's keep a simple real scale for the entire complex freq bin:
+        spectral_scale = (mask * w_complex)[None,:]  # shape (1,n)
+        X_fft_mod = X_fft * (1.0 + spectral_scale)  # e.g. (batch,n)
+
+        # 4) iFFT
+        x_ifft = jnp.fft.ifft(X_fft_mod, axis=-1).real
+
+        # 5) Add a small pointwise MLP. For brevity, do a single linear + nonlinearity:
+        #   x_out = MLP(x_ifft) + x_ifft
+        hidden_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_w", dist.Normal(0,1).expand([self.in_features, self.hidden_dim]))
+        hidden_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_b", dist.Normal(0,1).expand([self.hidden_dim]))
+        out_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_w", dist.Normal(0,1).expand([self.hidden_dim, self.in_features]))
+        out_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_b", dist.Normal(0,1).expand([self.in_features]))
+
+        h = jax.nn.relu(jnp.dot(x_ifft, hidden_w) + hidden_b)
+        x_mlp = jnp.dot(h, out_w) + out_b
+
+        # Residual
+        x_out = x_mlp + x_ifft
+        return x_out
+    
+class SpectralDenseBlock:
+    """
+    1) FFT -> multiply by trainable complex mask -> iFFT
+    2) Dense => Nonlinearity => Dense
+    3) Residual add
+    """
+
+    def __init__(self, in_features, hidden_dim=32, name="spectral_dense_block"):
+        self.in_features = in_features
+        self.hidden_dim = hidden_dim
+        self.name = name
+
+    def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
+        if X.ndim == 1:
+            X = X[None,:]
+        batch_size, d_in = X.shape
+        # 1) FFT
+        X_fft = jnp.fft.fft(X, axis=-1)
+        # 2) Sample spectral mask
+        w_real = numpyro.sample(f"{self.name}_fft_w_real", dist.Normal(0,1).expand([d_in]))
+        w_imag = numpyro.sample(f"{self.name}_fft_w_imag", dist.Normal(0,1).expand([d_in]))
+        mask_complex = w_real + 1j * w_imag
+        # multiply
+        out_fft = X_fft * mask_complex[None,:]
+        # iFFT
+        x_time = jnp.fft.ifft(out_fft, axis=-1).real
+
+        # 3) Dense => Nonlinearity => Dense
+        w1 = numpyro.sample(f"{self.name}_w1", dist.Normal(0,1).expand([d_in, self.hidden_dim]))
+        b1 = numpyro.sample(f"{self.name}_b1", dist.Normal(0,1).expand([self.hidden_dim]))
+        w2 = numpyro.sample(f"{self.name}_w2", dist.Normal(0,1).expand([self.hidden_dim, d_in]))
+        b2 = numpyro.sample(f"{self.name}_b2", dist.Normal(0,1).expand([d_in]))
+
+        h = jax.nn.relu(jnp.dot(x_time, w1) + b1)
+        x_dense = jnp.dot(h, w2) + b2
+
+        # 4) Residual
+        return x_time + x_dense
 
 class ParticleLinear:
     """

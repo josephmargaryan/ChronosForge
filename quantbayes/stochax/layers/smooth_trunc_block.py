@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 
-class SmoothTruncEquinoxBlockCirculant(eqx.Module):
+class BlockCirculantProcess(eqx.Module):
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
     block_size: int = eqx.static_field()

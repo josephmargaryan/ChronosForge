@@ -5,7 +5,7 @@ import jax.random
 import numpy as np
 
 
-class CirculantLinear(eqx.Module):
+class Circulant(eqx.Module):
     """
     A custom Equinox layer that implements a linear layer with a circulant matrix.
 
@@ -83,7 +83,7 @@ class CirculantLinear(eqx.Module):
 def test_circulant_linear():
     key = jax.random.PRNGKey(42)
     n = 8
-    layer = CirculantLinear(n, key=key, init_scale=1.0)
+    layer = Circulant(n, key=key, init_scale=1.0)
 
     key, subkey = jax.random.split(key)
     # Create a random input vector of shape (n,)

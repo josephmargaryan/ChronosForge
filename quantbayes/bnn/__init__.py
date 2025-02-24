@@ -1,12 +1,13 @@
 from .layers import (
     Linear,
-    FFTLinear,
-    BlockCirculantLayer,
+    Circulant,
+    BlockCirculant,
     ParticleLinear,
-    CircKernel,
-    CircKernelBlock,
+    CirculantProcess,
+    BlockCirculantProcess,
     DeepKernelCirc,
     DeepKerneBlockCirc,
+    FourierNeuralOperator1D,
     FFTParticleLinear,
     Conv1d,
     Conv2d,
@@ -23,18 +24,20 @@ from .layers import (
     LSTM,
     GaussianProcessLayer,
     VariationalLayer,
+    SpectralDenseBlock
 )
 from .layers.base import Module
 
 __all__ = [
     "Module",
     "Linear",
-    "FFTLinear",
-    "BlockCirculantLayer",
-    "CircKernel",
-    "CircKernelBlock",
+    "Circulant",
+    "BlockCirculant",
+    "CirculantProcess",
+    "BlockCirculantProcess",
     "DeepKernelCirc",
     "DeepKerneBlockCirc",
+    "FourierNeuralOperator1D",
     "ParticleLinear",
     "FFTParticleLinear",
     "Conv1d",
@@ -52,4 +55,5 @@ __all__ = [
     "LSTM",
     "GaussianProcessLayer",
     "VariationalLayer",
+    "SpectralDenseBlock"
 ]

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 
-class SmoothTruncEquinoxCirculant(eqx.Module):
+class CirculantProcess(eqx.Module):
     in_features: int = eqx.static_field()
     alpha: float = eqx.static_field()
     K: int = eqx.static_field()

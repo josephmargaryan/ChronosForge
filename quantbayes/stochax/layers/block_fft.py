@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import equinox as eqx
 
-class BlockCirculantLinear(eqx.Module):
+class BlockCirculant(eqx.Module):
     """
     Equinox module implementing a block-circulant weight matrix:
       - W is shape (k_out, k_in, b), each slice W[i,j] is a length-b "first row"
@@ -123,12 +123,12 @@ class BlockCirculantLinear(eqx.Module):
 
 
 class MyBlockCirculantNet(eqx.Module):
-    bc_layer: BlockCirculantLinear
+    bc_layer: BlockCirculant
     final_layer: eqx.nn.Linear
 
     def __init__(self, in_features, hidden_dim, *, key):
         key1, key2, key3 = jr.split(key, 3)
-        self.bc_layer = BlockCirculantLinear(
+        self.bc_layer = BlockCirculant(
             in_features=in_features,
             out_features=hidden_dim,
             block_size=16,  # choose b=16, for instance
@@ -181,7 +181,7 @@ def test_block_circulant_linear():
     d_out = 16
     block_size = 4
     # Create instance of BlockCirculantLinear.
-    layer = BlockCirculantLinear(
+    layer = BlockCirculant(
         in_features=d_in,
         out_features=d_out,
         block_size=block_size,
