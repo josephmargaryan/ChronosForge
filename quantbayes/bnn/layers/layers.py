@@ -1031,56 +1031,87 @@ class SpectralDenseBlock:
     """
     A block that performs:
       1) FFT on the input,
-      2) Multiplication by a trainable complex mask (with separate real and imaginary parts),
+      2) Multiplication by a trainable complex mask,
       3) Inverse FFT,
-      4) A pointwise dense transformation (linear -> ReLU -> linear),
-      5) And adds a residual connection.
+      4) A pointwise MLP that maps from in_features to out_features,
+      5) And adds a residual connection (with projection if needed).
     """
-
     def __init__(
-        self, in_features: int, hidden_dim: int = 32, name: str = "spectral_dense_block"
+        self,
+        in_features: int,
+        hidden_dim: int = 32,
+        out_features: int = None,
+        name: str = "spectral_dense_block"
     ):
         self.in_features = in_features
         self.hidden_dim = hidden_dim
+        # Default output dimension is the same as input if not provided.
+        self.out_features = out_features if out_features is not None else in_features
         self.name = name
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
+        # Ensure X is at least 2D.
         if X.ndim == 1:
             X = X[None, :]
         batch_size, d_in = X.shape
-        # 1) FFT
+
+        # 1) FFT of the input.
         X_fft = jnp.fft.fft(X, axis=-1)
-        # 2) Sample Fourier mask components.
+        
+        # 2) Sample and construct a trainable Fourier mask.
         w_real = numpyro.sample(
-            f"{self.name}_fft_w_real", dist.Normal(0, 1).expand([d_in]).to_event(1)
+            f"{self.name}_fft_w_real", 
+            dist.Normal(0, 1).expand([d_in]).to_event(1)
         )
         w_imag = numpyro.sample(
-            f"{self.name}_fft_w_imag", dist.Normal(0, 1).expand([d_in]).to_event(1)
+            f"{self.name}_fft_w_imag", 
+            dist.Normal(0, 1).expand([d_in]).to_event(1)
         )
         mask_complex = w_real + 1j * w_imag
-        # Multiply in frequency domain.
         out_fft = X_fft * mask_complex[None, :]
-        # 3) Inverse FFT
+        
+        # 3) Inverse FFT to go back to the time domain.
         x_time = jnp.fft.ifft(out_fft, axis=-1).real
+        
         # 4) Apply a pointwise MLP.
+        # First linear transformation: in_features -> hidden_dim.
         w1 = numpyro.sample(
             f"{self.name}_w1",
-            dist.Normal(0, 1).expand([d_in, self.hidden_dim]).to_event(2),
+            dist.Normal(0, 1).expand([d_in, self.hidden_dim]).to_event(2)
         )
         b1 = numpyro.sample(
-            f"{self.name}_b1", dist.Normal(0, 1).expand([self.hidden_dim]).to_event(1)
-        )
-        w2 = numpyro.sample(
-            f"{self.name}_w2",
-            dist.Normal(0, 1).expand([self.hidden_dim, d_in]).to_event(2),
-        )
-        b2 = numpyro.sample(
-            f"{self.name}_b2", dist.Normal(0, 1).expand([d_in]).to_event(1)
+            f"{self.name}_b1", 
+            dist.Normal(0, 1).expand([self.hidden_dim]).to_event(1)
         )
         h = jax.nn.relu(jnp.dot(x_time, w1) + b1)
+        # Second linear transformation: hidden_dim -> out_features.
+        w2 = numpyro.sample(
+            f"{self.name}_w2",
+            dist.Normal(0, 1).expand([self.hidden_dim, self.out_features]).to_event(2)
+        )
+        b2 = numpyro.sample(
+            f"{self.name}_b2", 
+            dist.Normal(0, 1).expand([self.out_features]).to_event(1)
+        )
         x_dense = jnp.dot(h, w2) + b2
+        
         # 5) Residual connection.
-        return x_time + x_dense
+        # If the dimensions differ, project x_time to match out_features.
+        if d_in != self.out_features:
+            w_proj = numpyro.sample(
+                f"{self.name}_w_proj",
+                dist.Normal(0, 1).expand([d_in, self.out_features]).to_event(2)
+            )
+            b_proj = numpyro.sample(
+                f"{self.name}_b_proj",
+                dist.Normal(0, 1).expand([self.out_features]).to_event(1)
+            )
+            shortcut = jnp.dot(x_time, w_proj) + b_proj
+        else:
+            shortcut = x_time
+
+        return shortcut + x_dense
+
 
 
 class ParticleLinear:

@@ -1,3 +1,4 @@
+from typing import Optional
 import jax
 import jax.random as jr
 import jax.numpy as jnp
@@ -468,38 +469,49 @@ class SpectralDenseBlock(eqx.Module):
       1. Applies FFT on the input,
       2. Multiplies by a trainable complex mask (w_real and w_imag),
       3. Applies inverse FFT (taking the real part),
-      4. Applies a pointwise MLP (Linear -> ReLU -> Linear),
-      5. Adds a residual connection.
+      4. Applies a pointwise MLP (Linear -> ReLU -> Linear) mapping to out_features,
+      5. And adds a residual connection (with a projection if in_features != out_features).
 
     This layer is defined for a single example with shape (in_features,).
     """
-
     in_features: int
+    out_features: int
     hidden_dim: int
     w_real: jnp.ndarray  # shape: (in_features,)
     w_imag: jnp.ndarray  # shape: (in_features,)
     linear1: eqx.nn.Linear  # maps (in_features,) -> (hidden_dim,)
-    linear2: eqx.nn.Linear  # maps (hidden_dim,) -> (in_features,)
+    linear2: eqx.nn.Linear  # maps (hidden_dim,) -> (out_features,)
+    proj: Optional[eqx.nn.Linear]  # optional projection from in_features to out_features
 
-    def __init__(self, in_features: int, hidden_dim: int, *, key):
+    def __init__(self, in_features: int, out_features: int, hidden_dim: int, *, key):
         self.in_features = in_features
+        self.out_features = out_features
         self.hidden_dim = hidden_dim
-        k1, k2, k3, k4 = jax.random.split(key, 4)
+        # Split keys for initialization.
+        k1, k2, k3, k4, k5 = jax.random.split(key, 5)
         self.w_real = jax.random.normal(k1, (in_features,)) * 0.1
         self.w_imag = jax.random.normal(k2, (in_features,)) * 0.1
         self.linear1 = eqx.nn.Linear(in_features, hidden_dim, key=k3)
-        self.linear2 = eqx.nn.Linear(hidden_dim, in_features, key=k4)
+        self.linear2 = eqx.nn.Linear(hidden_dim, out_features, key=k4)
+        # If in_features != out_features, create a projection for the residual path.
+        self.proj = eqx.nn.Linear(in_features, out_features, key=k5) if in_features != out_features else None
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # x is expected to be shape (in_features,)
-        X_fft = jnp.fft.fft(x)  # shape (in_features,), complex-valued
+        # x is expected to be of shape (in_features,)
+        # 1. FFT of input.
+        X_fft = jnp.fft.fft(x)
+        # 2. Construct trainable complex mask.
         mask_complex = self.w_real + 1j * self.w_imag
         out_fft = X_fft * mask_complex
-        x_time = jnp.fft.ifft(out_fft).real  # back to real signal
+        # 3. Inverse FFT to return to time domain.
+        x_time = jnp.fft.ifft(out_fft).real
+        # 4. Pointwise MLP.
         h = self.linear1(x_time)
         h = jax.nn.relu(h)
         x_dense = self.linear2(h)
-        return x_time + x_dense
+        # 5. Residual connection: project x_time if needed.
+        shortcut = self.proj(x_time) if self.proj is not None else x_time
+        return shortcut + x_dense
 
 
 def make_mask(n: int, n_modes: int):
