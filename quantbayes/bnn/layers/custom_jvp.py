@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
-from numpyro import transforms
+from numpyro.distributions import transforms
 
 __all__ = [
     "JVPCirculant",
