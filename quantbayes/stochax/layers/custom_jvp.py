@@ -1,9 +1,15 @@
+from typing import Optional
 import jax
 import jax.numpy as jnp
 import equinox as eqx
 import jax.random as jr
 
-__all__ = ["Circulant", "BlockCirculant"]
+__all__ = [
+    "Circulant", 
+    "BlockCirculant",
+    "JVPCirculantProcess",
+    "JVPBlockCirculantProcess"
+    ]
 
 
 @jax.custom_jvp
@@ -46,26 +52,34 @@ class JVPCirculant(eqx.Module):
     A circulant layer that uses a circulant weight matrix defined by its first row.
     The layer stores only the first row (a vector of shape (n,)) and a bias vector (shape (n,)).
     The forward pass computes:
-        y = circulant_matmul(x, first_row) + bias
+        y = circulant_matmul(x_padded, first_row) + bias
     where circulant_matmul is accelerated via a custom JVP rule.
-    """
 
+    If `padded_dim` is provided, the first row and bias are of length `padded_dim`, and
+    the input is padded with zeros on the right to match that size.
+    """
     first_row: jnp.ndarray  # shape (n,)
-    bias: jnp.ndarray  # shape (n,)
+    bias: jnp.ndarray       # shape (n,)
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
 
-    def __init__(self, in_features: int, *, key, init_scale: float = 1.0):
+    def __init__(self, in_features: int, padded_dim: Optional[int] = None, *, key, init_scale: float = 1.0):
         self.in_features = in_features
-        self.out_features = in_features  # circulant matrices are square
+        # Use padded_dim if provided; otherwise, no padding (square matrix of in_features).
+        self.out_features = padded_dim if padded_dim is not None else in_features
+
         key1, key2 = jr.split(key)
-        self.first_row = jr.normal(key1, (in_features,)) * init_scale
-        self.bias = jr.normal(key2, (in_features,)) * init_scale
+        self.first_row = jr.normal(key1, (self.out_features,)) * init_scale
+        self.bias = jr.normal(key2, (self.out_features,)) * init_scale
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # x can have any batch shape ending with in_features.
+        # If the layer uses padding, pad the input x along its last dimension.
+        if self.out_features != self.in_features:
+            pad_width = [(0, 0)] * (x.ndim - 1) + [(0, self.out_features - self.in_features)]
+            x = jnp.pad(x, pad_width)
         y = circulant_matmul(x, self.first_row)
         return y + self.bias
+
 
 
 @jax.custom_jvp
@@ -281,3 +295,193 @@ class JVPBlockCirculant(eqx.Module):
             out = out[..., : self.out_features]
         # Add bias.
         return out + self.bias[None, :] if out.ndim > 1 else out + self.bias
+
+
+@jax.custom_jvp
+def spectral_circulant_matmul(x: jnp.ndarray, fft_full: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute y = IFFT( FFT(x_pad) * fft_full ) with x zero-padded to length padded_dim,
+    where fft_full is the full (complex) Fourier mask.
+
+    x can be a 1D array or batched with shape (..., in_features).
+    The operation is performed along the last axis.
+    """
+    padded_dim = fft_full.shape[0]
+    single_example = False
+    if x.ndim == 1:
+        single_example = True
+        x = x[None, :]
+    d_in = x.shape[-1]
+    if d_in < padded_dim:
+        pad_len = padded_dim - d_in
+        x_pad = jnp.pad(x, ((0,0), (0, pad_len)))
+    elif d_in > padded_dim:
+        x_pad = x[..., :padded_dim]
+    else:
+        x_pad = x
+    X_fft = jnp.fft.fft(x_pad, axis=-1)
+    y_fft = X_fft * fft_full[None, :]
+    y = jnp.fft.ifft(y_fft, axis=-1).real
+    if single_example:
+        return y[0]
+    return y
+
+@spectral_circulant_matmul.defjvp
+def spectral_circulant_matmul_jvp(primals, tangents):
+    x, fft_full = primals
+    dx, dfft = tangents
+
+    padded_dim = fft_full.shape[0]
+    single_example = False
+    if x.ndim == 1:
+        single_example = True
+        x = x[None, :]
+        if dx is not None:
+            dx = dx[None, :]
+    d_in = x.shape[-1]
+    if d_in < padded_dim:
+        pad_len = padded_dim - d_in
+        x_pad = jnp.pad(x, ((0,0), (0, pad_len)))
+        dx_pad = jnp.pad(dx, ((0,0), (0, pad_len))) if dx is not None else None
+    elif d_in > padded_dim:
+        x_pad = x[..., :padded_dim]
+        dx_pad = dx[..., :padded_dim] if dx is not None else None
+    else:
+        x_pad = x
+        dx_pad = dx
+
+    X_fft = jnp.fft.fft(x_pad, axis=-1)
+    y_fft = X_fft * fft_full[None, :]
+    y = jnp.fft.ifft(y_fft, axis=-1).real
+
+    # Compute tangent contributions.
+    if dx is None:
+        dX_fft = 0.0
+    else:
+        dX_fft = jnp.fft.fft(dx_pad, axis=-1)
+    term1 = dX_fft * fft_full[None, :]
+    if dfft is None:
+        term2 = 0.0
+    else:
+        term2 = X_fft * dfft[None, :]
+    dy_fft = term1 + term2
+    dy = jnp.fft.ifft(dy_fft, axis=-1).real
+
+    if single_example:
+        return y[0], dy[0]
+    return y, dy
+
+class JVPCirculantProcess(eqx.Module):
+    """
+    Equinox-based spectral circulant layer with custom JVP.
+
+    The layer stores trainable Fourier coefficients for the half-spectrum.
+    In the forward pass it reconstructs the full Fourier mask and then calls a
+    custom_jvp-decorated function for the FFT-based multiplication.
+    """
+    in_features: int
+    padded_dim: int
+    alpha: float
+    K: int
+    k_half: int = eqx.static_field()
+    w_real: jnp.ndarray  # shape (k_half,)
+    w_imag: jnp.ndarray  # shape (k_half,)
+
+    def __init__(self, in_features: int, padded_dim: Optional[int] = None, alpha: float = 1.0, K: int = None, *, key):
+        self.in_features = in_features
+        # If padded_dim is not provided, default to in_features (no padding).
+        self.padded_dim = padded_dim if padded_dim is not None else in_features
+        self.alpha = alpha
+        self.k_half = self.padded_dim // 2 + 1
+
+        # If K is not specified or exceeds k_half, default to k_half.
+        if (K is None) or (K > self.k_half):
+            K = self.k_half
+        self.K = K
+
+        key_r, key_i = jr.split(key)
+        # Initialize the Fourier coefficients.
+        self.w_real = jr.normal(key_r, (self.k_half,)) * 0.1
+        self.w_imag = jr.normal(key_i, (self.k_half,)) * 0.1
+
+        # Zero out the imaginary part for DC.
+        self.w_imag = self.w_imag.at[0].set(0.0)
+        # For even padded_dim and k_half > 1, ensure Nyquist frequency is real.
+        if (self.padded_dim % 2 == 0) and (self.k_half > 1):
+            self.w_imag = self.w_imag.at[-1].set(0.0)
+
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        # Create a mask for frequencies beyond K.
+        freq_mask = jnp.arange(self.k_half) < self.K
+        half_complex = (self.w_real * freq_mask) + 1j * (self.w_imag * freq_mask)
+        # Reconstruct the full Fourier spectrum.
+        if (self.padded_dim % 2 == 0) and (self.k_half > 1):
+            nyquist = half_complex[-1].real[None]
+            fft_full = jnp.concatenate([half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]])
+        else:
+            fft_full = jnp.concatenate([half_complex, jnp.conjugate(half_complex[1:])[::-1]])
+        return spectral_circulant_matmul(x, fft_full)
+
+class JVPBlockCirculantProcess(eqx.Module):
+    """
+    Equinox module for a block-circulant layer that uses a custom JVP rule.
+    
+    The layer stores a block of circulant parameters (each block is defined by its first row)
+    and (optionally) a Bernoulli diagonal. The forward pass computes:
+    
+         out = block_circulant_matmul_custom(W, x, D_bernoulli) + bias
+    
+    where the custom JVP rule for block_circulant_matmul_custom reuses FFT computations.
+    """
+    W: jnp.ndarray           # shape (k_out, k_in, block_size)
+    D_bernoulli: Optional[jnp.ndarray]  # shape (in_features,) or None
+    bias: jnp.ndarray        # shape (out_features,)
+    in_features: int = eqx.static_field()
+    out_features: int = eqx.static_field()
+    block_size: int = eqx.static_field()
+    k_in: int = eqx.static_field()
+    k_out: int = eqx.static_field()
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        block_size: int,
+        *,
+        key,
+        init_scale: float = 0.1,
+        use_diag: bool = True,
+        use_bias: bool = True,
+    ):
+        self.in_features = in_features
+        self.out_features = out_features
+        self.block_size = block_size
+        # Determine the number of blocks along the input and output dimensions.
+        self.k_in = (in_features + block_size - 1) // block_size
+        self.k_out = (out_features + block_size - 1) // block_size
+
+        # Initialize block parameters.
+        k1, k2, k3 = jr.split(key, 3)
+        self.W = jr.normal(k1, (self.k_out, self.k_in, block_size)) * init_scale
+
+        if use_diag:
+            diag = jr.bernoulli(k2, p=0.5, shape=(in_features,))
+            self.D_bernoulli = jnp.where(diag, 1.0, -1.0)
+        else:
+            self.D_bernoulli = None
+
+        if use_bias:
+            self.bias = jr.normal(k3, (out_features,)) * init_scale
+        else:
+            self.bias = jnp.zeros((out_features,))
+
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        # The custom JVP-enabled function is assumed to be defined elsewhere.
+        out = block_circulant_matmul_custom(self.W, x, self.D_bernoulli)
+        # If the effective output dimension (k_out * block_size) is larger than out_features, slice.
+        if self.k_out * self.block_size > self.out_features:
+            out = out[..., :self.out_features]
+        # Add bias (broadcasting if needed).
+        if out.ndim == 1:
+            return out + self.bias
+        return out + self.bias[None, :]

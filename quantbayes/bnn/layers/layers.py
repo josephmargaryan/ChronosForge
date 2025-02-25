@@ -30,6 +30,7 @@ __all__ = [
     "LSTM",
     "GaussianProcessLayer",
     "VariationalLayer",
+    "MixtureOfTwoLayers"
 ]
 
 
@@ -620,6 +621,56 @@ class BlockCirculantProcess:
         if self._last_block_fft is None:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
+    
+class MixtureOfTwoLayers:
+    """
+    Combine outputs from two sub-layers via gating:
+      out = gate * outA + (1 - gate) * outB
+    gate can be:
+      (a) a param in [0,1],
+      (b) a sample from Beta distribution,
+      (c) an MLP output for data-dependent gating,
+      (d) a per-feature gating vector, etc.
+    """
+
+    def __init__(self, layerA, layerB, name="mixture_of_experts", gating_mode="param"):
+        """
+        :param layerA, layerB: callables, each takes X -> Y
+        :param gating_mode: "param", "beta", or "mlp" for demonstration
+        """
+        self.layerA = layerA
+        self.layerB = layerB
+        self.name = name
+        self.gating_mode = gating_mode
+
+    def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
+        outA = self.layerA(X)
+        outB = self.layerB(X)
+        # Suppose outA, outB have shape (batch_size, d_out).
+        if self.gating_mode == "param":
+            # learn a single global gate in [0,1]
+            logit_gate = numpyro.param(f"{self.name}_logit_gate", 0.0)  # scalar
+            gate = jax.nn.sigmoid(logit_gate)
+            # broadcast
+            return gate * outA + (1.0 - gate) * outB
+        elif self.gating_mode == "beta":
+            # sample a random gate from Beta
+            alpha0 = numpyro.param(f"{self.name}_alpha0", 2.0, constraint=dist.constraints.positive)
+            beta0  = numpyro.param(f"{self.name}_beta0", 2.0,  constraint=dist.constraints.positive)
+            gate_sample = numpyro.sample(f"{self.name}_gate", dist.Beta(alpha0, beta0))
+            return gate_sample * outA + (1.0 - gate_sample) * outB
+        elif self.gating_mode == "mlp":
+            # data-dependent gate (per example). We'll do a single-layer net from X to a scalar gate:
+            d_in = X.shape[-1]
+            w = numpyro.sample(f"{self.name}_gate_w", dist.Normal(0,1).expand([d_in, 1]))
+            b = numpyro.sample(f"{self.name}_gate_b", dist.Normal(0,1).expand([1]))
+            # shape => (batch_size, 1)
+            logit = jnp.dot(X, w) + b
+            gate = jax.nn.sigmoid(logit)  # shape (batch_size, 1)
+
+            return gate * outA + (1.0 - gate) * outB
+        else:
+            raise ValueError(f"Unrecognized gating_mode={self.gating_mode}")
 
 
 class DeepKernelCirc:
