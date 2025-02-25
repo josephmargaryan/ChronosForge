@@ -3,10 +3,8 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax.random as jr
 
-__all__ = [
-    "Circulant",
-    "BlockCirculant"
-]
+__all__ = ["Circulant", "BlockCirculant"]
+
 
 @jax.custom_jvp
 def circulant_matmul(x: jnp.ndarray, first_row: jnp.ndarray) -> jnp.ndarray:
@@ -22,6 +20,7 @@ def circulant_matmul(x: jnp.ndarray, first_row: jnp.ndarray) -> jnp.ndarray:
     fft_x = jnp.fft.fft(x, axis=-1)
     y = jnp.fft.ifft(fft_x * fft_first_col, axis=-1).real
     return y
+
 
 @circulant_matmul.defjvp
 def circulant_matmul_jvp(primals, tangents):
@@ -42,60 +41,6 @@ def circulant_matmul_jvp(primals, tangents):
     return y, dy_dx + dy_df
 
 
-@jax.custom_jvp
-def block_circulant_matmul(W: jnp.ndarray, x: jnp.ndarray, d_bernoulli: jnp.ndarray) -> jnp.ndarray:
-    """
-    Compute block-circulant multiplication.
-
-    W: shape (k_out, k_in, b) where each row is the first row of a circulant block.
-    x: input array of shape (batch, d_in) or (d_in,). If necessary, x is zero-padded
-       to length k_in * b.
-    d_bernoulli: optional diagonal of shape (d_in,) (applied elementwise if given).
-
-    Returns: y, shape (batch, k_out * b).
-    """
-    if x.ndim == 1:
-        x = x[None, :]
-    batch_size, d_in = x.shape
-    k_out, k_in, b = W.shape
-    # Apply d_bernoulli if provided.
-    if d_bernoulli is not None:
-        x = x * d_bernoulli[None, :]
-    # Zero-pad if needed.
-    pad_len = k_in * b - d_in
-    if pad_len > 0:
-        x = jnp.pad(x, ((0, 0), (0, pad_len)))
-    # Reshape into blocks.
-    x_blocks = x.reshape(batch_size, k_in, b)
-    def one_block_mul(w_ij, x_j):
-        c_fft = jnp.fft.fft(w_ij)  # (b,)
-        X_fft = jnp.fft.fft(x_j, axis=-1)  # (batch, b)
-        return jnp.fft.ifft(X_fft * jnp.conjugate(c_fft)[None, :], axis=-1).real
-    def compute_blockrow(i):
-        def sum_over_j(carry, j):
-            w_ij = W[i, j, :]  # (b,)
-            x_j = x_blocks[:, j, :]  # (batch, b)
-            return carry + one_block_mul(w_ij, x_j), None
-        init = jnp.zeros((batch_size, b))
-        out_time, _ = jax.lax.scan(sum_over_j, init, jnp.arange(k_in))
-        return out_time  # (batch, b)
-    out_blocks = jax.vmap(compute_blockrow)(jnp.arange(k_out))  # (k_out, batch, b)
-    out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(batch_size, k_out * b)
-    return out_reshaped
-
-@block_circulant_matmul.defjvp
-def block_circulant_matmul_jvp(primals, tangents):
-    W, x, d_bernoulli = primals
-    dW, dx, dd = tangents
-    y = block_circulant_matmul(W, x, d_bernoulli)
-    # Derivative with respect to x:
-    dy_dx = block_circulant_matmul(W, dx, d_bernoulli)
-    # Derivative with respect to W:
-    dy_dW = block_circulant_matmul(dW, x, d_bernoulli)
-    # For simplicity, we ignore the derivative with respect to d_bernoulli.
-    return y, dy_dx + dy_dW
-
-
 class JVPCirculant(eqx.Module):
     """
     A circulant layer that uses a circulant weight matrix defined by its first row.
@@ -104,8 +49,9 @@ class JVPCirculant(eqx.Module):
         y = circulant_matmul(x, first_row) + bias
     where circulant_matmul is accelerated via a custom JVP rule.
     """
+
     first_row: jnp.ndarray  # shape (n,)
-    bias: jnp.ndarray       # shape (n,)
+    bias: jnp.ndarray  # shape (n,)
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
 
@@ -122,50 +68,216 @@ class JVPCirculant(eqx.Module):
         return y + self.bias
 
 
+@jax.custom_jvp
+def block_circulant_matmul_custom(
+    W: jnp.ndarray, x: jnp.ndarray, d_bernoulli: jnp.ndarray
+):
+    """
+    Compute the block-circulant matrix multiplication:
+       out = B x
+    where B is defined via blocks of circulant matrices.
+
+    - W has shape (k_out, k_in, b): each row W[i, j, :] is the first row of a b×b circulant block.
+    - x is the input, of shape (batch, in_features) or (in_features,).
+    - d_bernoulli is an optional diagonal (of shape (in_features,)) of ±1 entries.
+
+    This function performs the following:
+      1. (Optionally) multiplies x elementwise by d_bernoulli.
+      2. Zero-pads x so that its length equals k_in * b.
+      3. Reshapes x into (batch, k_in, b).
+      4. For each output block i, sums over j the circulant multiplication via FFT:
+           FFT(x_block) * conj(FFT(W[i,j]))  → summed over j, then inverse FFT.
+    """
+    # Ensure x has a batch dimension.
+    single_example = x.ndim == 1
+    if single_example:
+        x = x[None, :]
+    batch_size = x.shape[0]
+    d_in = x.shape[-1]
+    k_in = W.shape[1]
+    b = W.shape[-1]
+
+    # (1) Multiply by Bernoulli diagonal if provided.
+    if d_bernoulli is not None:
+        x_d = x * d_bernoulli[None, :]
+    else:
+        x_d = x
+
+    # (2) Zero-pad x_d to length k_in * b.
+    pad_len = k_in * b - d_in
+    if pad_len > 0:
+        x_d = jnp.pad(x_d, ((0, 0), (0, pad_len)), mode="constant", constant_values=0.0)
+
+    # (3) Reshape into blocks: (batch, k_in, b)
+    X_blocks = x_d.reshape(batch_size, k_in, b)
+    # Compute FFT along the block dimension.
+    X_fft = jnp.fft.fft(X_blocks, axis=-1)  # shape: (batch, k_in, b)
+
+    # (4) Compute FFT for the circulant blocks in W.
+    W_fft = jnp.fft.fft(W, axis=-1)  # shape: (k_out, k_in, b)
+
+    # (5) For each output block row, sum over input blocks.
+    def compute_block_row(i):
+        # Multiply: for each input block j,
+        #   multiply X_fft[:, j, :] with conj(W_fft[i, j, :])
+        prod = X_fft * jnp.conjugate(W_fft[i, :, :])[None, :, :]  # (batch, k_in, b)
+        sum_over_j = jnp.sum(prod, axis=1)  # (batch, b)
+        # Inverse FFT to get the circulant product (real-valued).
+        return jnp.fft.ifft(sum_over_j, axis=-1).real  # (batch, b)
+
+    # Compute for all block rows (vmap over i=0,...,k_out-1).
+    block_out = jax.vmap(compute_block_row)(jnp.arange(W.shape[0]))  # (k_out, batch, b)
+    # Reshape: transpose to (batch, k_out, b) then flatten last two dims.
+    out = jnp.transpose(block_out, (1, 0, 2)).reshape(batch_size, W.shape[0] * b)
+    if single_example:
+        out = out[0]
+    return out
+
+
+@block_circulant_matmul_custom.defjvp
+def block_circulant_matmul_jvp(primals, tangents):
+    W, x, d_bernoulli = primals
+    dW, dx, dd = tangents  # dd corresponds to the tangent for d_bernoulli
+    # ----- Forward Pass -----
+    single_example = x.ndim == 1
+    if single_example:
+        x = x[None, :]
+    batch_size = x.shape[0]
+    d_in = x.shape[-1]
+    k_in = W.shape[1]
+    b = W.shape[-1]
+
+    if d_bernoulli is not None:
+        x_d = x * d_bernoulli[None, :]
+    else:
+        x_d = x
+
+    pad_len = k_in * b - d_in
+    if pad_len > 0:
+        x_d = jnp.pad(x_d, ((0, 0), (0, pad_len)), mode="constant", constant_values=0.0)
+    X_blocks = x_d.reshape(batch_size, k_in, b)
+    X_fft = jnp.fft.fft(X_blocks, axis=-1)  # (batch, k_in, b)
+    W_fft = jnp.fft.fft(W, axis=-1)  # (k_out, k_in, b)
+
+    def compute_block_row(i):
+        prod = X_fft * jnp.conjugate(W_fft[i, :, :])[None, :, :]
+        sum_over_j = jnp.sum(prod, axis=1)
+        return jnp.fft.ifft(sum_over_j, axis=-1).real  # (batch, b)
+
+    block_out = jax.vmap(compute_block_row)(jnp.arange(W.shape[0]))
+    out = jnp.transpose(block_out, (1, 0, 2)).reshape(batch_size, W.shape[0] * b)
+    if single_example:
+        out = out[0]
+
+    # ----- Tangent (JVP) Computation -----
+    # First, differentiate through the input multiplication by d_bernoulli.
+    if d_bernoulli is not None:
+        # d(x_d) = (dx * d_bernoulli) + (x * dd)
+        dx_d = dx * d_bernoulli[None, :] + (x * dd[None, :] if dd is not None else 0.0)
+    else:
+        dx_d = dx
+
+    if pad_len > 0:
+        dx_d = jnp.pad(
+            dx_d, ((0, 0), (0, pad_len)), mode="constant", constant_values=0.0
+        )
+    dX_blocks = dx_d.reshape(batch_size, k_in, b)
+    dX_fft = jnp.fft.fft(dX_blocks, axis=-1)  # (batch, k_in, b)
+
+    # For dW, if provided compute its FFT; otherwise, treat as zero.
+    if dW is not None:
+        dW_fft = jnp.fft.fft(dW, axis=-1)  # (k_out, k_in, b)
+    else:
+        dW_fft = 0.0
+
+    # For each output block row, the tangent contribution is given by:
+    #   ifft( sum_j ( dX_fft[:, j, :] * conj(W_fft[i, j, :])
+    #                + X_fft[:, j, :] * conj(dW_fft[i, j, :]) ) )
+    def compute_block_row_tangent(i):
+        term1 = dX_fft * jnp.conjugate(W_fft[i, :, :])[None, :, :]
+        term2 = X_fft * (
+            jnp.conjugate(dW_fft[i, :, :])[None, :, :] if dW is not None else 0.0
+        )
+        sum_over_j = jnp.sum(term1 + term2, axis=1)
+        return jnp.fft.ifft(sum_over_j, axis=-1).real  # (batch, b)
+
+    dblock_out = jax.vmap(compute_block_row_tangent)(jnp.arange(W.shape[0]))
+    d_out = jnp.transpose(dblock_out, (1, 0, 2)).reshape(batch_size, W.shape[0] * b)
+    if single_example:
+        d_out = d_out[0]
+    return out, d_out
+
 
 class JVPBlockCirculant(eqx.Module):
     """
-    A block-circulant layer that uses a block-circulant weight matrix and a bias vector.
+    Equinox module implementing a block-circulant layer that uses a custom JVP rule.
 
-    - W is of shape (k_out, k_in, b), where each slice W[i, j] is the first row of a circulant block.
-    - D_bernoulli is an optional diagonal (shape (in_features,)) with ±1 entries.
-    - A bias vector of shape (out_features,) is added to the output.
-    - The forward pass calls block_circulant_matmul, which has a custom JVP rule.
+    Parameters:
+      - W has shape (k_out, k_in, b), where each W[i,j,:] is the first row of a circulant block.
+      - D_bernoulli is an optional diagonal of ±1 entries (shape: (in_features,)).
+      - bias is added after the block-circulant multiplication.
+      - in_features and out_features are the overall dimensions (they may be padded up to a multiple of b).
+
+    The forward pass computes:
+         out = block_circulant_matmul_custom(W, x, D_bernoulli) + bias
+    and the custom JVP rule reuses FFT computations to accelerate gradient evaluation.
     """
-    W: jnp.ndarray             # shape: (k_out, k_in, b)
-    D_bernoulli: jnp.ndarray   # shape: (in_features,)
-    bias: jnp.ndarray          # shape: (out_features,)
+
+    W: jnp.ndarray  # shape: (k_out, k_in, b)
+    D_bernoulli: jnp.ndarray  # shape: (in_features,)
+    bias: jnp.ndarray  # shape: (out_features,)
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
     block_size: int = eqx.static_field()
     k_in: int = eqx.static_field()
     k_out: int = eqx.static_field()
 
-    def __init__(self, in_features: int, out_features: int, block_size: int, *, key, init_scale: float = 0.1, use_bernoulli_diag: bool = True, use_bias: bool = True):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        block_size: int,
+        *,
+        key,
+        init_scale: float = 0.1,
+        use_bernoulli_diag: bool = True,
+        use_bias: bool = True,
+    ):
         self.in_features = in_features
         self.out_features = out_features
         self.block_size = block_size
+
+        # Determine the number of blocks along the input and output dimensions.
         k_in = (in_features + block_size - 1) // block_size
         k_out = (out_features + block_size - 1) // block_size
         object.__setattr__(self, "k_in", k_in)
         object.__setattr__(self, "k_out", k_out)
+
+        # Initialize W with shape (k_out, k_in, block_size)
         k1, k2, k3 = jr.split(key, 3)
         self.W = jr.normal(k1, (k_out, k_in, block_size)) * init_scale
+
+        # Initialize the Bernoulli diagonal if enabled.
         if use_bernoulli_diag:
-            self.D_bernoulli = jnp.where(jr.bernoulli(k2, p=0.5, shape=(in_features,)), 1.0, -1.0)
+            diag_signs = jnp.where(
+                jr.bernoulli(k2, p=0.5, shape=(in_features,)), 1.0, -1.0
+            )
         else:
-            self.D_bernoulli = jnp.ones((in_features,))
+            diag_signs = jnp.ones((in_features,))
+        object.__setattr__(self, "D_bernoulli", diag_signs)
+
+        # Initialize bias if requested.
         if use_bias:
             self.bias = jr.normal(k3, (out_features,)) * init_scale
         else:
             self.bias = jnp.zeros((out_features,))
 
-    def __call__(self, x: jnp.ndarray, *, key=None, state=None, **kwargs) -> jnp.ndarray:
-        single_example = (x.ndim == 1)
-        if single_example:
-            x = x[None, :]
-        y = block_circulant_matmul(self.W, x, self.D_bernoulli)
-        y = y + self.bias[None, :]
-        if single_example:
-            y = y[0]
-        return y
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        # Compute block-circulant multiplication using the custom JVP rule.
+        out = block_circulant_matmul_custom(self.W, x, self.D_bernoulli)
+        # (Optional) slice the output if the padded output dimension is larger than out_features.
+        k_out_b = self.k_out * self.block_size
+        if k_out_b > self.out_features:
+            out = out[..., : self.out_features]
+        # Add bias.
+        return out + self.bias[None, :] if out.ndim > 1 else out + self.bias

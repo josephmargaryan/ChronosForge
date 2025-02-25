@@ -4,10 +4,8 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.distributions import transforms
 
-__all__ = [
-    "JVPCirculant",
-    "JVPBlockCirculant"
-]
+__all__ = ["JVPCirculant", "JVPBlockCirculant"]
+
 
 @jax.custom_jvp
 def fft_matmul_custom(first_row: jnp.ndarray, X: jnp.ndarray) -> jnp.ndarray:
@@ -25,6 +23,7 @@ def fft_matmul_custom(first_row: jnp.ndarray, X: jnp.ndarray) -> jnp.ndarray:
     result = jnp.fft.ifft(result_fft, axis=-1).real
     return result
 
+
 @fft_matmul_custom.defjvp
 def fft_matmul_custom_jvp(primals, tangents):
     first_row, X = primals
@@ -36,16 +35,20 @@ def fft_matmul_custom_jvp(primals, tangents):
     primal_out = jnp.fft.ifft(first_row_fft[None, :] * X_fft, axis=-1).real
 
     # Compute the directional derivatives.
-    d_first_row_fft = jnp.fft.fft(d_first_row, axis=-1) if d_first_row is not None else 0.
-    dX_fft = jnp.fft.fft(dX, axis=-1) if dX is not None else 0.
-    tangent_out = jnp.fft.ifft(d_first_row_fft[None, :] * X_fft +
-                               first_row_fft[None, :] * dX_fft,
-                               axis=-1).real
+    d_first_row_fft = (
+        jnp.fft.fft(d_first_row, axis=-1) if d_first_row is not None else 0.0
+    )
+    dX_fft = jnp.fft.fft(dX, axis=-1) if dX is not None else 0.0
+    tangent_out = jnp.fft.ifft(
+        d_first_row_fft[None, :] * X_fft + first_row_fft[None, :] * dX_fft, axis=-1
+    ).real
     return primal_out, tangent_out
 
 
 @jax.custom_jvp
-def block_circulant_matmul_custom(W: jnp.ndarray, x: jnp.ndarray, d_bernoulli: jnp.ndarray = None) -> jnp.ndarray:
+def block_circulant_matmul_custom(
+    W: jnp.ndarray, x: jnp.ndarray, d_bernoulli: jnp.ndarray = None
+) -> jnp.ndarray:
     """
     Performs block–circulant matrix multiplication via FFT.
 
@@ -84,8 +87,8 @@ def block_circulant_matmul_custom(W: jnp.ndarray, x: jnp.ndarray, d_bernoulli: j
     x_blocks = x.reshape(batch_size, k_in, b)
 
     # Compute FFTs.
-    W_fft = jnp.fft.fft(W, axis=-1)           # shape: (k_out, k_in, b)
-    X_fft = jnp.fft.fft(x_blocks, axis=-1)      # shape: (batch, k_in, b)
+    W_fft = jnp.fft.fft(W, axis=-1)  # shape: (k_out, k_in, b)
+    X_fft = jnp.fft.fft(x_blocks, axis=-1)  # shape: (batch, k_in, b)
 
     # Multiply in Fourier domain and sum over the input blocks.
     # For each output block row i:
@@ -95,10 +98,13 @@ def block_circulant_matmul_custom(W: jnp.ndarray, x: jnp.ndarray, d_bernoulli: j
     out = Y.reshape(batch_size, k_out * b)
     return out
 
+
 @block_circulant_matmul_custom.defjvp
 def block_circulant_matmul_custom_jvp(primals, tangents):
     W, x, d_bernoulli = primals
-    dW, dx, dd = tangents  # dd is the tangent for d_bernoulli (ignored here for simplicity)
+    dW, dx, dd = (
+        tangents  # dd is the tangent for d_bernoulli (ignored here for simplicity)
+    )
 
     if x.ndim == 1:
         x = x[None, :]
@@ -121,7 +127,7 @@ def block_circulant_matmul_custom_jvp(primals, tangents):
 
     # Compute tangent for x.
     if dx is None:
-        dx_eff = 0.
+        dx_eff = 0.0
     else:
         if d_bernoulli is not None:
             dx_eff = dx * d_bernoulli[None, :]
@@ -133,21 +139,22 @@ def block_circulant_matmul_custom_jvp(primals, tangents):
         x_tangent_blocks = dx_eff.reshape(batch_size, k_in, b)
         X_tangent_fft = jnp.fft.fft(x_tangent_blocks, axis=-1)
     else:
-        X_tangent_fft = 0.
+        X_tangent_fft = 0.0
 
     # Compute tangent for W.
     if dW is not None:
         W_tangent_fft = jnp.fft.fft(dW, axis=-1)
     else:
-        W_tangent_fft = 0.
+        W_tangent_fft = 0.0
 
     # The directional derivative in the Fourier domain is:
     # dY_fft = sum_j [ X_tangent_fft[:, None, j, :] * conj(W_fft)[None, :, j, :] +
     #                  X_fft[:, None, j, :] * conj(W_tangent_fft)[None, :, j, :] ]
     dY_fft = jnp.sum(
-        X_tangent_fft[:, None, :, :] * jnp.conjugate(W_fft)[None, :, :, :] +
-        X_fft[:, None, :, :] * jnp.conjugate(W_tangent_fft)[None, :, :, :],
-        axis=2)
+        X_tangent_fft[:, None, :, :] * jnp.conjugate(W_fft)[None, :, :, :]
+        + X_fft[:, None, :, :] * jnp.conjugate(W_tangent_fft)[None, :, :, :],
+        axis=2,
+    )
     tangent_out = jnp.fft.ifft(dY_fft, axis=-1).real.reshape(batch_size, k_out * b)
     return primal_out, tangent_out
 
@@ -159,11 +166,14 @@ class JVPCirculant:
         hidden = ifft( fft(first_row) * fft(X) ).real + bias
     and the JVP uses the saved FFT computations.
     """
+
     def __init__(
         self,
         in_features: int,
         name: str = "fft_layer",
-        first_row_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+        first_row_prior_fn=lambda shape: dist.Normal(0, 1)
+        .expand(shape)
+        .to_event(len(shape)),
         bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
     ):
         self.in_features = in_features
@@ -181,6 +191,7 @@ class JVPCirculant:
         hidden = fft_matmul_custom(first_row, X) + bias_circulant[None, :]
         return hidden
 
+
 class JVPBlockCirculant:
     """
     Block–circulant layer with custom JVP rules.
@@ -191,6 +202,7 @@ class JVPBlockCirculant:
       3. Computes the forward pass via the custom FFT–based block–circulant matmul.
       4. Uses the custom JVP for faster gradient computation.
     """
+
     def __init__(
         self,
         in_features: int,
@@ -215,7 +227,7 @@ class JVPBlockCirculant:
         self.bias_prior_fn = bias_prior_fn
         self.diag_prior = lambda shape: dist.TransformedDistribution(
             dist.Bernoulli(0.5).expand(shape).to_event(len(shape)),
-            [transforms.AffineTransform(loc=-1.0, scale=2.0)]
+            [transforms.AffineTransform(loc=-1.0, scale=2.0)],
         )
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:

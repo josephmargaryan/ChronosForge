@@ -9,8 +9,7 @@ __all__ = [
     "Circulant",
     "BlockCirculant",
     "CirculantProcess",
-    "BlockCirculantProcess"
-    "DeepKernelCirc",
+    "BlockCirculantProcess" "DeepKernelCirc",
     "DeepKerneBlockCirc",
     "FourierNeuralOperator1D",
     "SpectralDenseBlock",
@@ -105,7 +104,9 @@ class Linear:
         in_features: int,
         out_features: int,
         name: str = "layer",
-        weight_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+        weight_prior_fn=lambda shape: dist.Normal(0, 1)
+        .expand(shape)
+        .to_event(len(shape)),
         bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
     ):
         """
@@ -179,7 +180,9 @@ class Circulant:
         self,
         in_features: int,
         name: str = "fft_layer",
-        first_row_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+        first_row_prior_fn=lambda shape: dist.Normal(0, 1)
+        .expand(shape)
+        .to_event(len(shape)),
         bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
     ):
         """
@@ -218,8 +221,6 @@ class Circulant:
         )
         hidden = _fft_matmul(first_row, X) + bias_circulant[None, :]
         return hidden
-
-
 
 
 def _block_circulant_matmul(W, x, d_bernoulli=None):
@@ -279,14 +280,14 @@ def _block_circulant_matmul(W, x, d_bernoulli=None):
 class BlockCirculant:
     """
     NumPyro-style block-circulant layer.
-    
+
     This layer:
       - Samples W with shape (k_out, k_in, b) using a user-specified prior (default is Normal(0,1)).
       - Optionally samples a Bernoulli diagonal for the input (controlled by use_diag).
       - Always samples a bias vector (of shape (out_features,)) using a user-specified prior
         (default is Normal(0,1)).
       - Performs block-circulant matrix multiplication using FFT.
-    
+
     Parameters:
       in_features: int
           The overall input dimension.
@@ -304,6 +305,7 @@ class BlockCirculant:
           A function that, given a shape, returns a NumPyro distribution for the bias.
           (Default: Normal(0,1))
     """
+
     def __init__(
         self,
         in_features,
@@ -318,7 +320,7 @@ class BlockCirculant:
         self.out_features = out_features
         self.block_size = block_size
         self.name = name
-        
+
         # Calculate the number of blocks along the input and output dimensions.
         self.k_in = (in_features + block_size - 1) // block_size
         self.k_out = (out_features + block_size - 1) // block_size
@@ -327,8 +329,9 @@ class BlockCirculant:
         self.use_diag = use_diag
         self.bias_prior_fn = bias_prior_fn
         self.diag_prior = lambda shape: dist.TransformedDistribution(
-                dist.Bernoulli(0.5).expand(shape).to_event(len(shape)),
-                [transforms.AffineTransform(loc=-1.0, scale=2.0)])
+            dist.Bernoulli(0.5).expand(shape).to_event(len(shape)),
+            [transforms.AffineTransform(loc=-1.0, scale=2.0)],
+        )
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         # 1) Sample W with shape (k_out, k_in, block_size)
@@ -364,23 +367,23 @@ class BlockCirculant:
         return out
 
 
-
 class CirculantProcess:
     """
-    NumPyro-based circulant layer that places a frequency-dependent prior on the Fourier coefficients 
-    and truncates high frequencies (freq >= K). 
+    NumPyro-based circulant layer that places a frequency-dependent prior on the Fourier coefficients
+    and truncates high frequencies (freq >= K).
 
-    The prior distribution for each Fourier coefficient is defined via a callable `prior_fn` that takes 
+    The prior distribution for each Fourier coefficient is defined via a callable `prior_fn` that takes
     a scale (or array of scales) and returns a distribution (default: Gaussian).
 
-    If `alpha` is set to None, a prior is placed on it. You can define a custom prior on alpha via 
+    If `alpha` is set to None, a prior is placed on it. You can define a custom prior on alpha via
     the `alpha_prior` argument (default: Gamma(2.0, 1.0)).
     """
+
     def __init__(
         self,
         in_features: int,
         alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
-        alpha_prior=None,    # custom prior for alpha (if alpha is None)
+        alpha_prior=None,  # custom prior for alpha (if alpha is None)
         K: int = None,
         name: str = "smooth_trunc_circ",
         prior_fn=None,  # callable to return a distribution given a scale
@@ -388,7 +391,9 @@ class CirculantProcess:
         self.in_features = in_features
         self.alpha = alpha
         # Use a custom prior for alpha if provided; otherwise default to Gamma(2.0, 1.0)
-        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        self.alpha_prior = (
+            alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        )
         self.name = name
         self.k_half = in_features // 2 + 1  # number of independent coefficients
 
@@ -396,7 +401,11 @@ class CirculantProcess:
             K = self.k_half
         self.K = K
 
-        self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
+        self.prior_fn = (
+            prior_fn
+            if prior_fn is not None
+            else (lambda scale: dist.Normal(0.0, scale))
+        )
         self._last_fft_full = None  # will store the full FFT after forward pass
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
@@ -465,26 +474,29 @@ class CirculantProcess:
 
     def get_fourier_coeffs(self) -> jnp.ndarray:
         if self._last_fft_full is None:
-            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
+            raise ValueError(
+                "No Fourier coefficients available. Call the layer on some input first."
+            )
         return self._last_fft_full
 
 
 class BlockCirculantProcess:
     """
-    NumPyro-based block-circulant layer. Each b x b block is parameterized by a half-spectrum 
+    NumPyro-based block-circulant layer. Each b x b block is parameterized by a half-spectrum
     with frequency-dependent prior scale and optional truncation. Vectorized for faster sampling.
 
     A custom prior on the Fourier coefficients can be specified via `prior_fn` (default: Gaussian).
-    If `alpha` is None, a prior is placed on it. You can define a custom prior on alpha via the 
+    If `alpha` is None, a prior is placed on it. You can define a custom prior on alpha via the
     `alpha_prior` argument (default: Gamma(2.0, 1.0)).
     """
+
     def __init__(
         self,
         in_features: int,
         out_features: int,
         block_size: int,
         alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
-        alpha_prior=None,    # custom prior for alpha (if alpha is None)
+        alpha_prior=None,  # custom prior for alpha (if alpha is None)
         K: int = None,
         name: str = "smooth_trunc_block_circ",
         prior_fn=None,  # callable to return a distribution given a scale
@@ -493,7 +505,9 @@ class BlockCirculantProcess:
         self.out_features = out_features
         self.block_size = block_size
         self.alpha = alpha
-        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        self.alpha_prior = (
+            alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        )
         self.name = name
 
         self.k_in = (in_features + block_size - 1) // block_size
@@ -504,7 +518,11 @@ class BlockCirculantProcess:
             K = self.k_half
         self.K = K
 
-        self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
+        self.prior_fn = (
+            prior_fn
+            if prior_fn is not None
+            else (lambda scale: dist.Normal(0.0, scale))
+        )
         self._last_block_fft = None  # will store the full block FFT
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
@@ -578,17 +596,20 @@ class BlockCirculantProcess:
         def multiply_blockrow(i):
             def scan_j(carry, j):
                 w_ij = block_fft_full[i, j]  # shape (b,)
-                x_j = X_blocks[:, j, :]      # shape (bs, b)
+                x_j = X_blocks[:, j, :]  # shape (bs, b)
                 X_fft = jnp.fft.fft(x_j, axis=-1)
                 out_fft = X_fft * jnp.conjugate(w_ij)[None, :]
                 out_time = jnp.fft.ifft(out_fft, axis=-1).real
                 return carry + out_time, None
+
             init = jnp.zeros((bs, self.b))
             out_time, _ = jax.lax.scan(scan_j, init, jnp.arange(self.k_in))
             return out_time
 
         out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))
-        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(bs, self.k_out * self.b)
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
+            bs, self.k_out * self.b
+        )
         if self.k_out * self.b > self.out_features:
             out_reshaped = out_reshaped[:, : self.out_features]
         if X.shape[0] == 1 and bs == 1:
@@ -600,55 +621,63 @@ class BlockCirculantProcess:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
 
+
 class DeepKernelCirc:
     """
-    NumPyro-based deep kernel layer that first embeds the input via a learnable transform 
+    NumPyro-based deep kernel layer that first embeds the input via a learnable transform
     (e.g. an MLP) and then applies a circulant spectral transformation. The resulting kernel is
     k(ϕ(x), ϕ(x')), where the circulant part defines a stationary kernel in the index dimension.
-    
-    The spectral part places a frequency-dependent prior on the Fourier coefficients and truncates 
-    high frequencies (freq >= K). The prior for each Fourier coefficient is defined via a callable 
+
+    The spectral part places a frequency-dependent prior on the Fourier coefficients and truncates
+    high frequencies (freq >= K). The prior for each Fourier coefficient is defined via a callable
     `prior_fn` that takes a scale (or array of scales) and returns a distribution (default: Gaussian).
-    
-    If `alpha` is set to None, a prior is placed on it (default prior: Gamma(2.0, 1.0)). 
-    
-    The embedding is provided via the callable `phi_fn` (e.g. an MLP). If not provided, it defaults 
+
+    If `alpha` is set to None, a prior is placed on it (default prior: Gamma(2.0, 1.0)).
+
+    The embedding is provided via the callable `phi_fn` (e.g. an MLP). If not provided, it defaults
     to the identity function.
     """
+
     def __init__(
         self,
         in_features: int,
-        phi_fn=None,           # callable embedding function (e.g. an MLP). Defaults to identity.
-        alpha: float = 1.0,     # if set to None, a prior will be placed on alpha
-        alpha_prior=None,      # custom prior for alpha (if alpha is None)
+        phi_fn=None,  # callable embedding function (e.g. an MLP). Defaults to identity.
+        alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
+        alpha_prior=None,  # custom prior for alpha (if alpha is None)
         K: int = None,
         name: str = "deep_kernel_smooth_trunc_circ",
-        prior_fn=None,         # callable to return a distribution given a scale (default: Normal)
+        prior_fn=None,  # callable to return a distribution given a scale (default: Normal)
     ):
         self.in_features = in_features
         # Embedding function (ϕ). If None, we use identity (i.e. no embedding).
         self.phi_fn = phi_fn if phi_fn is not None else (lambda x: x)
         self.alpha = alpha
-        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        self.alpha_prior = (
+            alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        )
         self.name = name
-        
+
         # The Fourier coefficients are defined for a half spectrum.
         self.k_half = in_features // 2 + 1
         if K is None or K > self.k_half:
             K = self.k_half
         self.K = K
-        
-        self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
+
+        self.prior_fn = (
+            prior_fn
+            if prior_fn is not None
+            else (lambda scale: dist.Normal(0.0, scale))
+        )
         self._last_fft_full = None  # store the full FFT coefficients after forward pass
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         """
-        Applies the embedding transform ϕ to the input X, then performs the spectral (FFT-based) 
+        Applies the embedding transform ϕ to the input X, then performs the spectral (FFT-based)
         transformation with learned Fourier coefficients.
         """
         # First, transform the input using the provided phi_fn (e.g. an MLP).
         embedded_X = self.phi_fn(X)
-        
+
         # Sample or use fixed alpha.
         alpha = (
             numpyro.sample(f"{self.name}_alpha", self.alpha_prior)
@@ -715,12 +744,15 @@ class DeepKernelCirc:
 
     def get_fourier_coeffs(self) -> jnp.ndarray:
         if self._last_fft_full is None:
-            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
+            raise ValueError(
+                "No Fourier coefficients available. Call the layer on some input first."
+            )
         return self._last_fft_full
-    
+
+
 class DeepKerneBlockCirc:
     """
-    NumPyro-based deep kernel block-circulant layer. This layer first embeds the input using 
+    NumPyro-based deep kernel block-circulant layer. This layer first embeds the input using
     a learnable transform ϕ (e.g. an MLP) and then applies a block circulant spectral transformation.
     The effective kernel is given by k(ϕ(x), ϕ(x')), where the block circulant part defines a
     stationary kernel in the index (block) dimension.
@@ -742,6 +774,7 @@ class DeepKerneBlockCirc:
       - name: str, name used to label NumPyro sample sites.
       - prior_fn: callable, returns a distribution given a scale (default: Normal).
     """
+
     def __init__(
         self,
         in_features: int,
@@ -749,10 +782,10 @@ class DeepKerneBlockCirc:
         block_size: int,
         phi_fn=None,
         alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
-        alpha_prior=None,    # custom prior for alpha (if alpha is None)
+        alpha_prior=None,  # custom prior for alpha (if alpha is None)
         K: int = None,
         name: str = "deep_kernel_smooth_trunc_block_circ",
-        prior_fn=None,       # callable to return a distribution given a scale
+        prior_fn=None,  # callable to return a distribution given a scale
     ):
         self.in_features = in_features
         self.out_features = out_features
@@ -760,7 +793,9 @@ class DeepKerneBlockCirc:
         # Embedding function ϕ: default to identity if not provided.
         self.phi_fn = phi_fn if phi_fn is not None else (lambda x: x)
         self.alpha = alpha
-        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        self.alpha_prior = (
+            alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
+        )
         self.name = name
 
         # Compute the number of blocks in the input and output dimensions.
@@ -772,8 +807,14 @@ class DeepKerneBlockCirc:
             K = self.k_half
         self.K = K
 
-        self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
-        self._last_block_fft = None  # will store the full block FFT after a forward pass
+        self.prior_fn = (
+            prior_fn
+            if prior_fn is not None
+            else (lambda scale: dist.Normal(0.0, scale))
+        )
+        self._last_block_fft = (
+            None  # will store the full block FFT after a forward pass
+        )
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         """
@@ -854,18 +895,21 @@ class DeepKerneBlockCirc:
             def scan_j(carry, j):
                 # Get block-level FFT for block (i, j)
                 w_ij = block_fft_full[i, j]  # shape (b,)
-                x_j = X_blocks[:, j, :]      # shape (bs, b)
+                x_j = X_blocks[:, j, :]  # shape (bs, b)
                 X_fft = jnp.fft.fft(x_j, axis=-1)
                 # Multiply (you may choose conjugation or not depending on desired symmetry)
                 out_fft = X_fft * jnp.conjugate(w_ij)[None, :]
                 out_time = jnp.fft.ifft(out_fft, axis=-1).real
                 return carry + out_time, None
+
             init = jnp.zeros((bs, self.b))
             out_time, _ = jax.lax.scan(scan_j, init, jnp.arange(self.k_in))
             return out_time
 
         out_blocks = jax.vmap(multiply_blockrow)(jnp.arange(self.k_out))
-        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(bs, self.k_out * self.b)
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
+            bs, self.k_out * self.b
+        )
         # Trim to out_features if necessary.
         if self.k_out * self.b > self.out_features:
             out_reshaped = out_reshaped[:, : self.out_features]
@@ -879,25 +923,29 @@ class DeepKerneBlockCirc:
             raise ValueError("No Fourier coefficients available. Call the layer first.")
         return self._last_block_fft
 
+
 class FourierNeuralOperator1D:
     """
-    A toy 1D Fourier Neural Operator with L "Fourier layers." 
+    A toy 1D Fourier Neural Operator with L "Fourier layers."
     Each layer:
       - transforms the input to the frequency domain via FFT,
       - truncates high frequencies by keeping only the first n_modes (and the symmetric tail),
       - multiplies by a trainable complex mask (implemented via a single real-valued weight vector),
       - performs the inverse FFT,
       - then applies a small pointwise MLP with a residual connection.
-      
+
     If out_features != in_features, a final linear layer is applied.
     """
-    def __init__(self,
-                 in_features: int,
-                 out_features: int = None,
-                 n_modes: int = None,
-                 L: int = 2,
-                 hidden_dim: int = 16,
-                 name: str = "fourier_operator"):
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int = None,
+        n_modes: int = None,
+        L: int = 2,
+        hidden_dim: int = 16,
+        name: str = "fourier_operator",
+    ):
         """
         Parameters:
           in_features: int, the dimension of the input function.
@@ -923,14 +971,14 @@ class FourierNeuralOperator1D:
             out = self._fourier_layer(out, ell)
         if self.out_features != d_in:
             # Final linear mapping.
-            w = numpyro.sample(f"{self.name}_final_w",
-                               dist.Normal(0, 1)
-                                 .expand([d_in, self.out_features])
-                                 .to_event(2))
-            b = numpyro.sample(f"{self.name}_final_b",
-                               dist.Normal(0, 1)
-                                 .expand([self.out_features])
-                                 .to_event(1))
+            w = numpyro.sample(
+                f"{self.name}_final_w",
+                dist.Normal(0, 1).expand([d_in, self.out_features]).to_event(2),
+            )
+            b = numpyro.sample(
+                f"{self.name}_final_b",
+                dist.Normal(0, 1).expand([self.out_features]).to_event(1),
+            )
             out = jnp.dot(out, w) + b
         return out
 
@@ -939,43 +987,46 @@ class FourierNeuralOperator1D:
         X_fft = jnp.fft.fft(x, axis=-1)
         n = x.shape[-1]
         # 2) Sample spectral weight for the full frequency range.
-        w_complex = numpyro.sample(f"{self.name}_layer{layer_idx}_spectral_weight",
-                                   dist.Normal(0, 1)
-                                     .expand([n])
-                                     .to_event(1))
+        w_complex = numpyro.sample(
+            f"{self.name}_layer{layer_idx}_spectral_weight",
+            dist.Normal(0, 1).expand([n]).to_event(1),
+        )
+
         # 3) Build a mask that keeps the first and last n_modes frequencies.
         def make_mask(n, n_modes):
             mask = jnp.zeros((n,))
             mask = mask.at[:n_modes].set(1.0)
             mask = mask.at[-n_modes:].set(1.0)
             return mask
+
         mask = make_mask(n, self.n_modes)
         spectral_scale = (mask * w_complex)[None, :]  # Broadcast to (1, n)
         X_fft_mod = X_fft * (1.0 + spectral_scale)
         # 4) Inverse FFT.
         x_ifft = jnp.fft.ifft(X_fft_mod, axis=-1).real
         # 5) Apply a small pointwise MLP with a residual connection.
-        hidden_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_w",
-                                  dist.Normal(0, 1)
-                                    .expand([self.in_features, self.hidden_dim])
-                                    .to_event(2))
-        hidden_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_b",
-                                  dist.Normal(0, 1)
-                                    .expand([self.hidden_dim])
-                                    .to_event(1))
-        out_w = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_w",
-                               dist.Normal(0, 1)
-                                 .expand([self.hidden_dim, self.in_features])
-                                 .to_event(2))
-        out_b = numpyro.sample(f"{self.name}_layer{layer_idx}_pw_out_b",
-                               dist.Normal(0, 1)
-                                 .expand([self.in_features])
-                                 .to_event(1))
+        hidden_w = numpyro.sample(
+            f"{self.name}_layer{layer_idx}_pw_w",
+            dist.Normal(0, 1).expand([self.in_features, self.hidden_dim]).to_event(2),
+        )
+        hidden_b = numpyro.sample(
+            f"{self.name}_layer{layer_idx}_pw_b",
+            dist.Normal(0, 1).expand([self.hidden_dim]).to_event(1),
+        )
+        out_w = numpyro.sample(
+            f"{self.name}_layer{layer_idx}_pw_out_w",
+            dist.Normal(0, 1).expand([self.hidden_dim, self.in_features]).to_event(2),
+        )
+        out_b = numpyro.sample(
+            f"{self.name}_layer{layer_idx}_pw_out_b",
+            dist.Normal(0, 1).expand([self.in_features]).to_event(1),
+        )
         h = jax.nn.relu(jnp.dot(x_ifft, hidden_w) + hidden_b)
         x_mlp = jnp.dot(h, out_w) + out_b
         # Residual connection.
         return x_ifft + x_mlp
-    
+
+
 class SpectralDenseBlock:
     """
     A block that performs:
@@ -985,7 +1036,10 @@ class SpectralDenseBlock:
       4) A pointwise dense transformation (linear -> ReLU -> linear),
       5) And adds a residual connection.
     """
-    def __init__(self, in_features: int, hidden_dim: int = 32, name: str = "spectral_dense_block"):
+
+    def __init__(
+        self, in_features: int, hidden_dim: int = 32, name: str = "spectral_dense_block"
+    ):
         self.in_features = in_features
         self.hidden_dim = hidden_dim
         self.name = name
@@ -997,36 +1051,32 @@ class SpectralDenseBlock:
         # 1) FFT
         X_fft = jnp.fft.fft(X, axis=-1)
         # 2) Sample Fourier mask components.
-        w_real = numpyro.sample(f"{self.name}_fft_w_real",
-                                dist.Normal(0, 1)
-                                  .expand([d_in])
-                                  .to_event(1))
-        w_imag = numpyro.sample(f"{self.name}_fft_w_imag",
-                                dist.Normal(0, 1)
-                                  .expand([d_in])
-                                  .to_event(1))
+        w_real = numpyro.sample(
+            f"{self.name}_fft_w_real", dist.Normal(0, 1).expand([d_in]).to_event(1)
+        )
+        w_imag = numpyro.sample(
+            f"{self.name}_fft_w_imag", dist.Normal(0, 1).expand([d_in]).to_event(1)
+        )
         mask_complex = w_real + 1j * w_imag
         # Multiply in frequency domain.
         out_fft = X_fft * mask_complex[None, :]
         # 3) Inverse FFT
         x_time = jnp.fft.ifft(out_fft, axis=-1).real
         # 4) Apply a pointwise MLP.
-        w1 = numpyro.sample(f"{self.name}_w1",
-                            dist.Normal(0, 1)
-                              .expand([d_in, self.hidden_dim])
-                              .to_event(2))
-        b1 = numpyro.sample(f"{self.name}_b1",
-                            dist.Normal(0, 1)
-                              .expand([self.hidden_dim])
-                              .to_event(1))
-        w2 = numpyro.sample(f"{self.name}_w2",
-                            dist.Normal(0, 1)
-                              .expand([self.hidden_dim, d_in])
-                              .to_event(2))
-        b2 = numpyro.sample(f"{self.name}_b2",
-                            dist.Normal(0, 1)
-                              .expand([d_in])
-                              .to_event(1))
+        w1 = numpyro.sample(
+            f"{self.name}_w1",
+            dist.Normal(0, 1).expand([d_in, self.hidden_dim]).to_event(2),
+        )
+        b1 = numpyro.sample(
+            f"{self.name}_b1", dist.Normal(0, 1).expand([self.hidden_dim]).to_event(1)
+        )
+        w2 = numpyro.sample(
+            f"{self.name}_w2",
+            dist.Normal(0, 1).expand([self.hidden_dim, d_in]).to_event(2),
+        )
+        b2 = numpyro.sample(
+            f"{self.name}_b2", dist.Normal(0, 1).expand([d_in]).to_event(1)
+        )
         h = jax.nn.relu(jnp.dot(x_time, w1) + b1)
         x_dense = jnp.dot(h, w2) + b2
         # 5) Residual connection.
@@ -1040,6 +1090,7 @@ class ParticleLinear:
     Applies linear transformations to inputs for each particle, then aggregates
     the outputs to yield a (batch_size, out_features) output.
     """
+
     def __init__(
         self,
         in_features: int,
@@ -1068,18 +1119,20 @@ class ParticleLinear:
         w = numpyro.sample(
             f"{self.name}_w",
             dist.Normal(0, 1)
-                .expand([particles, self.in_features, self.out_features])
-                .to_event(3)  # Treat each particle's weight matrix as a joint variable.
+            .expand([particles, self.in_features, self.out_features])
+            .to_event(3),  # Treat each particle's weight matrix as a joint variable.
         )
         b = numpyro.sample(
             f"{self.name}_b",
             dist.Normal(0, 1)
-                .expand([particles, self.out_features])
-                .to_event(2)  # Treat each particle's bias vector as a joint variable.
+            .expand([particles, self.out_features])
+            .to_event(2),  # Treat each particle's bias vector as a joint variable.
         )
 
         # Compute output for each particle.
-        particle_outputs = jnp.einsum("pbi,pij->pbj", X, w) + b  # (particles, batch_size, out_features)
+        particle_outputs = (
+            jnp.einsum("pbi,pij->pbj", X, w) + b
+        )  # (particles, batch_size, out_features)
 
         # Aggregate across particles.
         if self.aggregation == "mean":
@@ -1102,6 +1155,7 @@ class FFTParticleLinear:
     and a bias vector. Applies FFT-based multiplication and then aggregates
     across particles.
     """
+
     def __init__(
         self,
         in_features: int,
@@ -1128,19 +1182,19 @@ class FFTParticleLinear:
         first_rows = numpyro.sample(
             f"{self.name}_first_rows",
             dist.Normal(0, 1)
-                .expand([particles, self.in_features])
-                .to_event(2)  # Each particle's first row is a joint variable.
+            .expand([particles, self.in_features])
+            .to_event(2),  # Each particle's first row is a joint variable.
         )
         biases = numpyro.sample(
             f"{self.name}_biases",
             dist.Normal(0, 1)
-                .expand([particles, self.in_features])
-                .to_event(2)  # Each particle's bias vector is a joint variable.
+            .expand([particles, self.in_features])
+            .to_event(2),  # Each particle's bias vector is a joint variable.
         )
 
         def fft_particle_transform(p_idx):
             first_row = first_rows[p_idx]  # (in_features,)
-            bias = biases[p_idx]           # (in_features,)
+            bias = biases[p_idx]  # (in_features,)
             transformed = _fft_matmul(first_row, X[p_idx])  # (batch_size, in_features)
             return transformed + bias
 
@@ -2161,10 +2215,16 @@ class LSTM:
 
 # --- Unified Gaussian Process Layer ---
 class GaussianProcessLayer:
-    def __init__(self, input_dim: int, kernel_type: str = "rbf", name: str = "gp_layer", **kernel_kwargs):
+    def __init__(
+        self,
+        input_dim: int,
+        kernel_type: str = "rbf",
+        name: str = "gp_layer",
+        **kernel_kwargs,
+    ):
         """
         A unified GP layer that supports multiple kernels.
-        
+
         Parameters:
           input_dim: int - dimensionality of input features.
           kernel_type: str - one of: "rbf", "spectralmixture", "matern32", "matern52",
@@ -2194,7 +2254,7 @@ class GaussianProcessLayer:
             self.kernel_fn = PolynomialKernel(input_dim, **kernel_kwargs)
         else:
             raise ValueError(f"Unknown kernel type: {kernel_type}")
-    
+
     def __call__(self, X: jnp.ndarray, X2: jnp.ndarray = None) -> jnp.ndarray:
         if X2 is None:
             X2 = X
@@ -2203,8 +2263,11 @@ class GaussianProcessLayer:
         # For full covariance (i.e. when X2 is X), add noise.
         if X is X2:
             # Store the noise parameter in the instance.
-            self.noise = numpyro.param(f"{self.name}_noise", jnp.array(1.0),
-                                        constraint=dist.constraints.positive)
+            self.noise = numpyro.param(
+                f"{self.name}_noise",
+                jnp.array(1.0),
+                constraint=dist.constraints.positive,
+            )
             K = K + self.noise * jnp.eye(X.shape[0])
         return K
 
@@ -2213,10 +2276,16 @@ class GaussianProcessLayer:
         if X2 is None:
             X2 = X
         # Retrieve kernel parameters
-        length_scale = numpyro.param(f"{self.name}_length_scale", jnp.array(1.0),
-                                      constraint=dist.constraints.positive)
-        variance = numpyro.param(f"{self.name}_variance", jnp.array(1.0),
-                                  constraint=dist.constraints.positive)
+        length_scale = numpyro.param(
+            f"{self.name}_length_scale",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        variance = numpyro.param(
+            f"{self.name}_variance",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
         # Compute squared Euclidean distances.
         X_sq = jnp.sum(X**2, axis=-1, keepdims=True)
         X2_sq = jnp.sum(X2**2, axis=-1, keepdims=True)
@@ -2236,19 +2305,31 @@ class SpectralMixtureKernel:
         if X2 is None:
             X2 = X
         diff = jnp.linalg.norm(X[:, None, :] - X2[None, :, :], axis=-1)
-        weights = numpyro.param(f"{self.name}_weights", jnp.ones(self.Q) / self.Q,
-                                constraint=dist.constraints.simplex)
-        means = numpyro.param(f"{self.name}_means", jnp.ones(self.Q),
-                              constraint=dist.constraints.positive)
-        variances = numpyro.param(f"{self.name}_variances", jnp.ones(self.Q),
-                                  constraint=dist.constraints.positive)
+        weights = numpyro.param(
+            f"{self.name}_weights",
+            jnp.ones(self.Q) / self.Q,
+            constraint=dist.constraints.simplex,
+        )
+        means = numpyro.param(
+            f"{self.name}_means", jnp.ones(self.Q), constraint=dist.constraints.positive
+        )
+        variances = numpyro.param(
+            f"{self.name}_variances",
+            jnp.ones(self.Q),
+            constraint=dist.constraints.positive,
+        )
         kernel = 0.0
         for q in range(self.Q):
             wq = weights[q]
             vq = variances[q]
             muq = means[q]
-            kernel += wq * jnp.exp(-2 * (jnp.pi ** 2) * (diff ** 2) * vq) * jnp.cos(2 * jnp.pi * diff * muq)
+            kernel += (
+                wq
+                * jnp.exp(-2 * (jnp.pi**2) * (diff**2) * vq)
+                * jnp.cos(2 * jnp.pi * diff * muq)
+            )
         return kernel
+
 
 # Matern 3/2 Kernel:
 class Matern32Kernel:
@@ -2260,12 +2341,23 @@ class Matern32Kernel:
         if X2 is None:
             X2 = X
         diff = jnp.linalg.norm(X[:, None, :] - X2[None, :, :], axis=-1)
-        length_scale = numpyro.param(f"{self.name}_length_scale", jnp.array(1.0),
-                                      constraint=dist.constraints.positive)
-        variance = numpyro.param(f"{self.name}_variance", jnp.array(1.0),
-                                  constraint=dist.constraints.positive)
+        length_scale = numpyro.param(
+            f"{self.name}_length_scale",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        variance = numpyro.param(
+            f"{self.name}_variance",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
         sqrt3 = jnp.sqrt(3.0)
-        return variance * (1 + sqrt3 * diff / length_scale) * jnp.exp(-sqrt3 * diff / length_scale)
+        return (
+            variance
+            * (1 + sqrt3 * diff / length_scale)
+            * jnp.exp(-sqrt3 * diff / length_scale)
+        )
+
 
 # Matern 5/2 Kernel:
 class Matern52Kernel:
@@ -2277,12 +2369,23 @@ class Matern52Kernel:
         if X2 is None:
             X2 = X
         diff = jnp.linalg.norm(X[:, None, :] - X2[None, :, :], axis=-1)
-        length_scale = numpyro.param(f"{self.name}_length_scale", jnp.array(1.0),
-                                      constraint=dist.constraints.positive)
-        variance = numpyro.param(f"{self.name}_variance", jnp.array(1.0),
-                                  constraint=dist.constraints.positive)
+        length_scale = numpyro.param(
+            f"{self.name}_length_scale",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        variance = numpyro.param(
+            f"{self.name}_variance",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
         sqrt5 = jnp.sqrt(5.0)
-        return variance * (1 + sqrt5 * diff / length_scale + (5 * diff**2) / (3 * length_scale**2)) * jnp.exp(-sqrt5 * diff / length_scale)
+        return (
+            variance
+            * (1 + sqrt5 * diff / length_scale + (5 * diff**2) / (3 * length_scale**2))
+            * jnp.exp(-sqrt5 * diff / length_scale)
+        )
+
 
 # Periodic Kernel:
 class PeriodicKernel:
@@ -2294,13 +2397,23 @@ class PeriodicKernel:
         if X2 is None:
             X2 = X
         diff = jnp.linalg.norm(X[:, None, :] - X2[None, :, :], axis=-1)
-        length_scale = numpyro.param(f"{self.name}_length_scale", jnp.array(1.0),
-                                      constraint=dist.constraints.positive)
-        variance = numpyro.param(f"{self.name}_variance", jnp.array(1.0),
-                                  constraint=dist.constraints.positive)
-        period = numpyro.param(f"{self.name}_period", jnp.array(1.0),
-                                constraint=dist.constraints.positive)
-        return variance * jnp.exp(-2 * (jnp.sin(jnp.pi * diff / period) ** 2) / (length_scale ** 2))
+        length_scale = numpyro.param(
+            f"{self.name}_length_scale",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        variance = numpyro.param(
+            f"{self.name}_variance",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        period = numpyro.param(
+            f"{self.name}_period", jnp.array(1.0), constraint=dist.constraints.positive
+        )
+        return variance * jnp.exp(
+            -2 * (jnp.sin(jnp.pi * diff / period) ** 2) / (length_scale**2)
+        )
+
 
 # Rational Quadratic Kernel:
 class RationalQuadraticKernel:
@@ -2312,13 +2425,21 @@ class RationalQuadraticKernel:
         if X2 is None:
             X2 = X
         diff = jnp.linalg.norm(X[:, None, :] - X2[None, :, :], axis=-1)
-        length_scale = numpyro.param(f"{self.name}_length_scale", jnp.array(1.0),
-                                      constraint=dist.constraints.positive)
-        variance = numpyro.param(f"{self.name}_variance", jnp.array(1.0),
-                                  constraint=dist.constraints.positive)
-        alpha = numpyro.param(f"{self.name}_alpha", jnp.array(1.0),
-                               constraint=dist.constraints.positive)
-        return variance * (1 + (diff ** 2) / (2 * alpha * length_scale ** 2)) ** (-alpha)
+        length_scale = numpyro.param(
+            f"{self.name}_length_scale",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        variance = numpyro.param(
+            f"{self.name}_variance",
+            jnp.array(1.0),
+            constraint=dist.constraints.positive,
+        )
+        alpha = numpyro.param(
+            f"{self.name}_alpha", jnp.array(1.0), constraint=dist.constraints.positive
+        )
+        return variance * (1 + (diff**2) / (2 * alpha * length_scale**2)) ** (-alpha)
+
 
 # Linear Kernel:
 class LinearKernel:
@@ -2332,6 +2453,7 @@ class LinearKernel:
         bias = numpyro.param(f"{self.name}_bias", jnp.array(0.0))
         return (X @ X2.T) + bias
 
+
 # Polynomial Kernel:
 class PolynomialKernel:
     def __init__(self, input_dim: int, degree: int = 2, name: str = "poly"):
@@ -2342,12 +2464,11 @@ class PolynomialKernel:
     def __call__(self, X: jnp.ndarray, X2: jnp.ndarray = None) -> jnp.ndarray:
         if X2 is None:
             X2 = X
-        gamma = numpyro.param(f"{self.name}_gamma", jnp.array(1.0),
-                                constraint=dist.constraints.positive)
+        gamma = numpyro.param(
+            f"{self.name}_gamma", jnp.array(1.0), constraint=dist.constraints.positive
+        )
         coef0 = numpyro.param(f"{self.name}_coef0", jnp.array(1.0))
         return (gamma * (X @ X2.T) + coef0) ** self.degree
-
-
 
 
 class VariationalLayer:

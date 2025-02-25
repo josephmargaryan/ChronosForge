@@ -4,9 +4,10 @@ from .layers import (
     CirculantProcess,
     BlockCirculantProcess,
     SpectralDenseBlock,
-    FourierNeuralOperator1D
+    FourierNeuralOperator1D,
 )
 from .custom_jvp import JVPBlockCirculant, JVPCirculant
+
 __all__ = [
     "Circulant",
     "BlockCirculant",
@@ -14,6 +15,6 @@ __all__ = [
     "BlockCirculantProcess",
     "SpectralDenseBlock",
     "FourierNeuralOperator1D",
-    "JVPBlockCirculant", 
-    "JVPCirculant"
+    "JVPBlockCirculant",
+    "JVPCirculant",
 ]

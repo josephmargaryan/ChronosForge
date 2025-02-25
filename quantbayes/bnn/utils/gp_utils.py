@@ -1,13 +1,14 @@
-import matplotlib.pyplot as plt 
-import jax 
+import matplotlib.pyplot as plt
+import jax
 import numpy as np
 
 __all__ = [
     "visualize_gp_kernel",
     "sample_gp_prior",
     "predict_gp",
-    "visualize_predictions"
+    "visualize_predictions",
 ]
+
 
 def visualize_gp_kernel(gp_layer, X):
     """
@@ -19,7 +20,7 @@ def visualize_gp_kernel(gp_layer, X):
 
     Returns:
       fig: Matplotlib figure.
-    
+
     Example Usage:
     preds = predict_gp(model, X_train, y_train, X_test)
     mean_pred, var_pred = preds

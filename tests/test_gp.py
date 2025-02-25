@@ -6,7 +6,13 @@ import jax
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 
-from quantbayes.bnn.utils import predict_gp, visualize_predictions, visualize_gp_kernel, visualize_predictions, sample_gp_prior
+from quantbayes.bnn.utils import (
+    predict_gp,
+    visualize_predictions,
+    visualize_gp_kernel,
+    visualize_predictions,
+    sample_gp_prior,
+)
 from quantbayes.stochax.utils import visualize_circulant_layer, analyze_pre_activations
 from quantbayes import bnn
 from quantbayes.fake_data import generate_regression_data
@@ -19,13 +25,16 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=24
 )
 
+
 class GaussianProcess(bnn.Module):
     def __init__(self):
         super().__init__(task_type="gp")
 
     def __call__(self, X, y=None):
         N, in_features = X.shape
-        gp_layer = bnn.GaussianProcessLayer(input_dim=in_features, kernel_type="spectralmixture", name="gp_layer")
+        gp_layer = bnn.GaussianProcessLayer(
+            input_dim=in_features, kernel_type="spectralmixture", name="gp_layer"
+        )
         kernel_matrix = gp_layer(X)
         f = numpyro.sample(
             "f",
@@ -64,6 +73,7 @@ sample_gp_prior(model.gp_layer, X_train, num_samples=5)
 
 ################### Fourier eigenvalues ########################
 
+
 class FFT(bnn.Module):
     def __init__(self, in_features):
         super().__init__(method="nuts", task_type="regression")
@@ -72,7 +82,7 @@ class FFT(bnn.Module):
 
     def __call__(self, X, y=None):
         N, in_features = X.shape
-        
+
         fft_layer = bnn.SmoothTruncCirculantLayer(
             in_features=in_features, alpha=1, K=7, name="fft_layer"
         )
@@ -94,7 +104,7 @@ class FFT(bnn.Module):
         """
         X_pre = self.fft_layer(X)
         return jax.lax.stop_gradient(X_pre)
-    
+
 
 model = FFT(1)
 model.compile(num_warmup=500, num_samples=1000)
@@ -106,7 +116,7 @@ rmse = np.sqrt(mean_squared_error(np.array(y_test), np.array(mean_pred)))
 print(f"FFTCirc RMSE: {rmse}")
 conv_matrix = analyze_pre_activations(model, X)
 
-############### Scikit-Learn ################## 
+############### Scikit-Learn ##################
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -121,11 +131,14 @@ X = df.drop("target", axis=1).values  # scikit-learn uses numpy arrays
 y = df["target"].values
 
 # Split the data
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=24)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=24
+)
 
 # Define a composite kernel: a constant kernel times an RBF kernel plus a white noise kernel.
-kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)) + \
-         WhiteKernel(noise_level=1e-5, noise_level_bounds=(1e-10, 1e1))
+kernel = C(1.0, (1e-3, 1e3)) * RBF(
+    length_scale=1.0, length_scale_bounds=(1e-2, 1e2)
+) + WhiteKernel(noise_level=1e-5, noise_level_bounds=(1e-10, 1e1))
 
 # Instantiate the GaussianProcessRegressor
 gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, random_state=42)

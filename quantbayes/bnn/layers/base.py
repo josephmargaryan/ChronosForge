@@ -186,11 +186,11 @@ class Module:
         posterior: str = "logits",
         num_samples: Optional[int] = None,
         credible_interval: float = 90,
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         Unified visualization method that delegates to task-specific methods.
-        
+
         Parameters:
             X (jnp.ndarray): Input data.
             y (Optional[jnp.ndarray]): Ground truth labels (if available).
@@ -205,7 +205,9 @@ class Module:
         elif self.task_type == "binary":
             self._visualize_binary(X, y, rng_key, posterior, num_samples)
         elif self.task_type == "regression":
-            self._visualize_regression(X, y, rng_key, posterior, num_samples, credible_interval)
+            self._visualize_regression(
+                X, y, rng_key, posterior, num_samples, credible_interval
+            )
         elif self.task_type == "image_classification":
             self._visualize_image_classification(X, y, posterior, **kwargs)
         elif self.task_type == "image_segmentation":
@@ -220,11 +222,11 @@ class Module:
         posterior: str = "logits",
         image_size: Optional[int] = None,
         in_channels: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         Visualizes predictions for image classification tasks.
-        
+
         Parameters:
             X (jnp.ndarray): Input images (batch_size, channels, height, width)
             y (Optional[jnp.ndarray]): True labels (if available).
@@ -235,7 +237,9 @@ class Module:
         """
         # Get predictions and compute mean probabilities.
         pred_samples = self.predict(X, jax.random.PRNGKey(0), posterior=posterior)
-        mean_preds = jax.nn.softmax(pred_samples.mean(axis=0), axis=-1)  # [batch_size, num_classes]
+        mean_preds = jax.nn.softmax(
+            pred_samples.mean(axis=0), axis=-1
+        )  # [batch_size, num_classes]
         predicted_classes = jnp.argmax(mean_preds, axis=-1)
 
         # Setup grid for visualization.
@@ -251,18 +255,25 @@ class Module:
                 continue
 
             if X.ndim == 4:
-                img = X[i].transpose(1, 2, 0)  # Convert (batch, channels, height, width) -> (height, width, channels)
+                img = X[i].transpose(
+                    1, 2, 0
+                )  # Convert (batch, channels, height, width) -> (height, width, channels)
             else:
                 if image_size is not None and in_channels is not None:
                     img = jnp.zeros((image_size, image_size, in_channels))
                 else:
-                    raise ValueError("Input X is not 4D and no fallback image_size/in_channels provided.")
+                    raise ValueError(
+                        "Input X is not 4D and no fallback image_size/in_channels provided."
+                    )
 
             true_label = y[i] if y is not None else None
             pred_label = int(predicted_classes[i])
             pred_probs = mean_preds[i]
 
-            ax.imshow(img.squeeze(), cmap="gray" if (X.ndim == 4 and X.shape[1] == 1) else None)
+            ax.imshow(
+                img.squeeze(),
+                cmap="gray" if (X.ndim == 4 and X.shape[1] == 1) else None,
+            )
             ax.axis("off")
             title = f"Pred: {pred_label} ({pred_probs[pred_label]:.2f})"
             if y is not None:
@@ -279,14 +290,14 @@ class Module:
         rng_key: Any,
         posterior: str = "logits",
         num_samples: Optional[int] = None,
-        credible_interval: float = 90
+        credible_interval: float = 90,
     ) -> None:
         """
         Visualizes regression predictions.
-        
+
         Depending on the input dimensionality, uses either a line plot with credible intervals
         (for single-feature data) or a scatter plot with error bars and residual plot (for multi-feature data).
-        
+
         Parameters:
             X (jnp.ndarray): Input features. For 1D regression, shape (n_samples,) or (n_samples, 1);
                              for multi-feature, shape (n_samples, n_features) with n_features > 1.
@@ -307,14 +318,20 @@ class Module:
             plt.figure(figsize=(10, 6))
             plt.scatter(X, y, color="black", label="True values", alpha=0.7)
             sorted_idx = np.argsort(X.flatten())
-            plt.plot(X.flatten()[sorted_idx], pred_mean.flatten()[sorted_idx], color="blue", lw=2, label="Predictive mean")
+            plt.plot(
+                X.flatten()[sorted_idx],
+                pred_mean.flatten()[sorted_idx],
+                color="blue",
+                lw=2,
+                label="Predictive mean",
+            )
             plt.fill_between(
                 X.flatten()[sorted_idx],
                 lower_bound.flatten()[sorted_idx],
                 upper_bound.flatten()[sorted_idx],
                 color="blue",
                 alpha=0.2,
-                label=f"{credible_interval}% Credible Interval"
+                label=f"{credible_interval}% Credible Interval",
             )
             plt.xlabel("X")
             plt.ylabel("y")
@@ -325,8 +342,13 @@ class Module:
             # Multi-feature regression: scatter plot and residual plot.
             fig, axs = plt.subplots(1, 2, figsize=(14, 6))
             axs[0].errorbar(
-                pred_mean, y, yerr=[y - lower_bound, upper_bound - y],
-                fmt="o", alpha=0.6, ecolor="gray", capsize=3
+                pred_mean,
+                y,
+                yerr=[y - lower_bound, upper_bound - y],
+                fmt="o",
+                alpha=0.6,
+                ecolor="gray",
+                capsize=3,
             )
             min_val = min(y.min(), pred_mean.min())
             max_val = max(y.max(), pred_mean.max())
@@ -334,7 +356,7 @@ class Module:
             axs[0].set_xlabel("Predicted")
             axs[0].set_ylabel("True")
             axs[0].set_title("Predicted vs. True Values")
-            
+
             residuals = y - pred_mean
             axs[1].scatter(pred_mean, residuals, alpha=0.6)
             axs[1].axhline(0, color="k", linestyle="--", lw=2)
@@ -350,14 +372,14 @@ class Module:
         y: jnp.ndarray,
         rng_key: Any,
         posterior: str = "logits",
-        num_samples: Optional[int] = None
+        num_samples: Optional[int] = None,
     ) -> None:
         """
         Visualizes binary classification predictions by displaying:
           1. Histogram of predicted probabilities.
           2. ROC curve with AUC.
           3. Calibration plot.
-        
+
         Parameters:
             X (jnp.ndarray): Input data.
             y (jnp.ndarray): True binary labels (0 or 1).
@@ -375,12 +397,16 @@ class Module:
         roc_auc = auc(fpr, tpr)
 
         fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-        axs[0].hist(pred_mean_prob, bins=20, color="skyblue", edgecolor="black", alpha=0.8)
+        axs[0].hist(
+            pred_mean_prob, bins=20, color="skyblue", edgecolor="black", alpha=0.8
+        )
         axs[0].set_title("Histogram of Predicted Probabilities")
         axs[0].set_xlabel("Predicted Probability")
         axs[0].set_ylabel("Frequency")
 
-        axs[1].plot(fpr, tpr, color="darkred", lw=2, label=f"ROC curve (AUC = {roc_auc:.2f})")
+        axs[1].plot(
+            fpr, tpr, color="darkred", lw=2, label=f"ROC curve (AUC = {roc_auc:.2f})"
+        )
         axs[1].plot([0, 1], [0, 1], color="gray", lw=2, linestyle="--")
         axs[1].set_xlim([0.0, 1.0])
         axs[1].set_ylim([0.0, 1.05])
@@ -390,7 +416,9 @@ class Module:
         axs[1].legend(loc="lower right")
 
         prob_true, prob_pred = calibration_curve(y, pred_mean_prob, n_bins=10)
-        axs[2].plot(prob_pred, prob_true, marker="o", linewidth=1, label="Calibration curve")
+        axs[2].plot(
+            prob_pred, prob_true, marker="o", linewidth=1, label="Calibration curve"
+        )
         axs[2].plot([0, 1], [0, 1], linestyle="--", label="Perfect calibration")
         axs[2].set_xlabel("Mean Predicted Probability")
         axs[2].set_ylabel("Fraction of Positives")
@@ -407,13 +435,13 @@ class Module:
         y: jnp.ndarray,
         rng_key: Any,
         posterior: str = "logits",
-        num_samples: Optional[int] = None
+        num_samples: Optional[int] = None,
     ) -> None:
         """
         Visualizes multiclass classification predictions by showing:
           1. A confusion matrix.
           2. A bar chart of average predicted probabilities per class.
-        
+
         Parameters:
             X (jnp.ndarray): Input data.
             y (jnp.ndarray): True class labels (0, 1, ..., num_classes-1).
@@ -429,6 +457,7 @@ class Module:
 
         # Compute confusion matrix.
         from sklearn.metrics import confusion_matrix  # Local import if only needed here
+
         cm = confusion_matrix(y, pred_classes)
 
         fig, axs = plt.subplots(1, 2, figsize=(14, 6))
@@ -439,7 +468,9 @@ class Module:
 
         num_classes = pred_mean_probs.shape[1]
         avg_probs = np.mean(pred_mean_probs, axis=0)
-        axs[1].bar(range(num_classes), avg_probs, color="mediumseagreen", edgecolor="black")
+        axs[1].bar(
+            range(num_classes), avg_probs, color="mediumseagreen", edgecolor="black"
+        )
         axs[1].set_xlabel("Class")
         axs[1].set_ylabel("Average Predicted Probability")
         axs[1].set_title("Average Predicted Probabilities")
@@ -455,11 +486,11 @@ class Module:
         X: jnp.ndarray,
         y: Optional[jnp.ndarray] = None,
         posterior: str = "logits",
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         Visualizes predictions for image segmentation tasks.
-        
+
         Parameters:
             X (jnp.ndarray): Input images (batch_size, channels, height, width).
             y (Optional[jnp.ndarray]): Ground truth segmentation masks.
@@ -493,7 +524,9 @@ class Module:
 
             if y is not None:
                 true_mask = y[i].squeeze()
-                axes[i, 1].contour(true_mask, colors="red", linewidths=1, alpha=0.7, levels=[0.5])
+                axes[i, 1].contour(
+                    true_mask, colors="red", linewidths=1, alpha=0.7, levels=[0.5]
+                )
 
             im = axes[i, 2].imshow(unc_map, cmap="viridis")
             axes[i, 2].axis("off")

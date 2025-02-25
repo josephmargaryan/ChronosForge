@@ -9,6 +9,7 @@ import numpyro.distributions as dist
 from quantbayes import bnn, fake_data
 from quantbayes.stochax.utils import visualize_circulant_layer
 
+
 # Assume your MyNet model is defined as follows:
 class FFT(bnn.Module):
     def __init__(self, in_features):
@@ -41,6 +42,7 @@ class FFT(bnn.Module):
         X_pre = self.fft_layer(X)
         return jax.lax.stop_gradient(X_pre)
 
+
 tkey, vkey = jr.split(jr.key(12), 2)
 
 df = fake_data.generate_regression_data(n_categorical=0, n_continuous=13)
@@ -51,4 +53,3 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 model = FFT(13)
 model.compile(num_warmup=10, num_samples=10)
 model.fit(X, y, tkey)
-

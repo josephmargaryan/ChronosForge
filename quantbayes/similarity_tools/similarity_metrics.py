@@ -33,6 +33,7 @@ class SimilarityMetrics:
         """Allow passing any custom function."""
         return func(a, b) if callable(func) else 0
 
+
 class TypeMapper:
     @staticmethod
     def map_veeva_type_to_bayes(veeva_type):

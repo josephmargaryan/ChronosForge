@@ -2,8 +2,17 @@ import pandas as pd
 from tqdm import tqdm
 from rapidfuzz import fuzz
 
+
 class SimilarityMatcher:
-    def __init__(self, source_df, target_df, source_id, target_id, matching_config, overall_threshold=0.8):
+    def __init__(
+        self,
+        source_df,
+        target_df,
+        source_id,
+        target_id,
+        matching_config,
+        overall_threshold=0.8,
+    ):
         """
         source_df, target_df: DataFrames containing the records.
         source_id, target_id: Column names that uniquely identify records in each DataFrame.
@@ -66,18 +75,26 @@ class SimilarityMatcher:
                             weighted_sum += sim * weight
                             total_weight += weight
                     else:  # "fuzzy"
-                        sim = self.calculate_similarity_for_column(source_val, target_val, sim_func)
+                        sim = self.calculate_similarity_for_column(
+                            source_val, target_val, sim_func
+                        )
                         weighted_sum += sim * weight
                         total_weight += weight
 
-                overall_sim = 1.0 if override else (weighted_sum / total_weight if total_weight > 0 else 0.0)
+                overall_sim = (
+                    1.0
+                    if override
+                    else (weighted_sum / total_weight if total_weight > 0 else 0.0)
+                )
 
                 if overall_sim >= self.overall_threshold:
-                    matches.append({
-                        "source_id": source_row[self.source_id],
-                        "target_id": target_row[self.target_id],
-                        "overall_similarity": overall_sim,
-                    })
+                    matches.append(
+                        {
+                            "source_id": source_row[self.source_id],
+                            "target_id": target_row[self.target_id],
+                            "overall_similarity": overall_sim,
+                        }
+                    )
                 pbar.update(1)
         pbar.close()
         return pd.DataFrame(matches)
@@ -114,32 +131,32 @@ if __name__ == "__main__":
             "sim_func": SimilarityMetrics.levenshtein_similarity,
             "weight": 0.4,
             "match_type": "fuzzy",
-            "override": False
+            "override": False,
         },
         "name": {
             "sim_func": SimilarityMetrics.levenshtein_similarity,
             "weight": 0.4,
             "match_type": "fuzzy",
-            "override": False
+            "override": False,
         },
         "type": {
             "sim_func": TypeMapper.type_similarity,
             "weight": 0.1,
             "match_type": "direct",
-            "override": False  # Its score (1 or 0) is combined by weight; it doesn't override overall.
+            "override": False,  # Its score (1 or 0) is combined by weight; it doesn't override overall.
         },
         "phone": {
             "sim_func": SimilarityMetrics.levenshtein_similarity,
             "weight": 0.1,
             "match_type": "fuzzy",
-            "override": False
+            "override": False,
         },
         "email": {
             "sim_func": SimilarityMetrics.exact_match,
-            "weight": 0.0,       # Weight isn't used since it's an override field.
+            "weight": 0.0,  # Weight isn't used since it's an override field.
             "match_type": "direct",
-            "override": True     # A match here overrides the overall score to 1.0.
-        }
+            "override": True,  # A match here overrides the overall score to 1.0.
+        },
     }
 
     # -----------------------------
@@ -148,10 +165,10 @@ if __name__ == "__main__":
     matcher = SimilarityMatcher(
         source_df=bayes,
         target_df=veeva,
-        source_id="id",   # Unique identifier column in bayes DataFrame.
-        target_id="id",   # Unique identifier column in veeva DataFrame.
+        source_id="id",  # Unique identifier column in bayes DataFrame.
+        target_id="id",  # Unique identifier column in veeva DataFrame.
         matching_config=matching_config,
-        overall_threshold=0.70
+        overall_threshold=0.70,
     )
 
     match_results = matcher.match_records()
@@ -159,4 +176,3 @@ if __name__ == "__main__":
 
     # Optionally, save the results as a parquet file.
     match_results.to_parquet("results.parquet", index=False)
-

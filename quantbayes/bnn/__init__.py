@@ -24,7 +24,7 @@ from .layers import (
     LSTM,
     GaussianProcessLayer,
     VariationalLayer,
-    SpectralDenseBlock
+    SpectralDenseBlock,
 )
 from .layers.base import Module
 from .layers.custom_jvp import JVPBlockCirculant, JVPCirculant
@@ -57,6 +57,6 @@ __all__ = [
     "GaussianProcessLayer",
     "VariationalLayer",
     "SpectralDenseBlock",
-    "JVPBlockCirculant", 
-    "JVPCirculant"
+    "JVPBlockCirculant",
+    "JVPCirculant",
 ]

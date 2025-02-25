@@ -16,15 +16,17 @@ class TimeSeriesPreprocessor:
         categorical_cols: Optional[List[str]] = None,
         numeric_cols: Optional[List[str]] = None,
         feature_scaler: Optional[object] = None,  # e.g., StandardScaler()
-        target_scaler: Optional[object] = None,   # e.g., MinMaxScaler()
+        target_scaler: Optional[object] = None,  # e.g., MinMaxScaler()
         seq_length: int = 7,
         forecast_horizon: int = 1,
         top_k_fourier: int = 3,
         remove_na: bool = True,
-        data_format: str = "dataframe",           # "dataframe" or "numpy"
+        data_format: str = "dataframe",  # "dataframe" or "numpy"
         column_names: Optional[List[str]] = None,  # For numpy input
-        target_index: Optional[int] = None,        # For numpy input if target_col is not provided
-        auto_detect: bool = True                   # Automatically detect categorical/numeric cols if not provided
+        target_index: Optional[
+            int
+        ] = None,  # For numpy input if target_col is not provided
+        auto_detect: bool = True,  # Automatically detect categorical/numeric cols if not provided
     ):
         """
         Enhanced time-series preprocessor.
@@ -63,7 +65,9 @@ class TimeSeriesPreprocessor:
         self.datetime_col = datetime_col
         self.target_col = target_col
         self.categorical_cols = categorical_cols  # May be None; will auto-detect if so and auto_detect==True
-        self.numeric_cols = numeric_cols          # May be None; will auto-detect if so and auto_detect==True
+        self.numeric_cols = (
+            numeric_cols  # May be None; will auto-detect if so and auto_detect==True
+        )
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler
         self.seq_length = seq_length
@@ -86,7 +90,9 @@ class TimeSeriesPreprocessor:
 
         # Logger
         self.logger = logging.getLogger(__name__)
-        logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+        logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+        )
 
     def _prepare_dataframe(self, data: Union[pd.DataFrame, np.ndarray]) -> pd.DataFrame:
         """Convert numpy input to DataFrame if needed."""
@@ -106,7 +112,7 @@ class TimeSeriesPreprocessor:
         for col in df.columns:
             if col in [self.target_col, self.datetime_col]:
                 continue
-            if df[col].dtype == 'object' or str(df[col].dtype).startswith('category'):
+            if df[col].dtype == "object" or str(df[col].dtype).startswith("category"):
                 cat_cols.append(col)
             elif pd.api.types.is_numeric_dtype(df[col]):
                 if df[col].nunique() < 10:
@@ -138,7 +144,9 @@ class TimeSeriesPreprocessor:
                 reshaped = df[[cat_col]].astype(str).values
                 encoded = encoder.fit_transform(reshaped)
                 self.fitted_encoders[cat_col] = encoder
-                self.logger.info(f"Fitted one-hot encoder for '{cat_col}' with {len(encoder.categories_[0])} categories.")
+                self.logger.info(
+                    f"Fitted one-hot encoder for '{cat_col}' with {len(encoder.categories_[0])} categories."
+                )
             else:
                 encoder = self.fitted_encoders[cat_col]
                 reshaped = df[[cat_col]].astype(str).values
@@ -148,7 +156,9 @@ class TimeSeriesPreprocessor:
             df = pd.concat([df.drop(columns=[cat_col]), encoded_df], axis=1)
         return df
 
-    def _apply_scaling(self, X: np.ndarray, y: Optional[np.ndarray] = None, fit: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    def _apply_scaling(
+        self, X: np.ndarray, y: Optional[np.ndarray] = None, fit: bool = False
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
         Scale features and target.
         """
@@ -198,7 +208,9 @@ class TimeSeriesPreprocessor:
         self.logger.info("Temporal features added.")
         return df
 
-    def _fourier_transform(self, series: np.ndarray, period: int = 365) -> Tuple[np.ndarray, np.ndarray]:
+    def _fourier_transform(
+        self, series: np.ndarray, period: int = 365
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute FFT of a series and return frequencies and magnitudes.
         """
@@ -208,24 +220,32 @@ class TimeSeriesPreprocessor:
         mags = np.abs(fft_vals)
         return freqs, mags
 
-    def _add_fourier_features(self, df: pd.DataFrame, period: int = 365) -> pd.DataFrame:
+    def _add_fourier_features(
+        self, df: pd.DataFrame, period: int = 365
+    ) -> pd.DataFrame:
         """
         Add top_k_fourier Fourier features (global FFT on target series).
         """
-        self.logger.info(f"Adding top {self.top_k_fourier} Fourier features using '{self.target_col}'.")
+        self.logger.info(
+            f"Adding top {self.top_k_fourier} Fourier features using '{self.target_col}'."
+        )
         target_series = df[self.target_col].values
         freqs, mags = self._fourier_transform(target_series, period=period)
         pos_idx = np.where(freqs > 0)
         freqs, mags = freqs[pos_idx], mags[pos_idx]
-        top_idx = np.argsort(mags)[::-1][:self.top_k_fourier]
+        top_idx = np.argsort(mags)[::-1][: self.top_k_fourier]
         for i, idx in enumerate(top_idx):
             feat_name = f"fft_feat_{i}"
-            df[feat_name] = np.sin(2 * np.pi * freqs[idx] * np.arange(len(df))) + np.cos(2 * np.pi * freqs[idx] * np.arange(len(df)))
+            df[feat_name] = np.sin(
+                2 * np.pi * freqs[idx] * np.arange(len(df))
+            ) + np.cos(2 * np.pi * freqs[idx] * np.arange(len(df)))
             self.logger.debug(f"Added Fourier feature '{feat_name}'.")
         self.logger.info("Fourier features added.")
         return df
 
-    def _create_sequences(self, X: np.ndarray, y: Optional[np.ndarray]) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    def _create_sequences(
+        self, X: np.ndarray, y: Optional[np.ndarray]
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
         Create sequences of length seq_length with the subsequent forecast_horizon target.
         """
@@ -245,7 +265,7 @@ class TimeSeriesPreprocessor:
         data: Union[pd.DataFrame, np.ndarray],
         add_temporal: bool = True,
         add_fourier: bool = False,
-        fourier_period: int = 365
+        fourier_period: int = 365,
     ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
         """
         Fit the preprocessing pipeline on training data and return:
@@ -257,13 +277,17 @@ class TimeSeriesPreprocessor:
         df = df.sort_values(by=self.datetime_col).reset_index(drop=True)
         df = self._remove_nans(df)
 
-        if self.auto_detect and (self.categorical_cols is None or self.numeric_cols is None):
+        if self.auto_detect and (
+            self.categorical_cols is None or self.numeric_cols is None
+        ):
             auto_cat, auto_num = self._auto_detect_columns(df)
             if self.categorical_cols is None:
                 self.categorical_cols = auto_cat
             if self.numeric_cols is None:
                 self.numeric_cols = auto_num
-            self.logger.info(f"Auto-detected categorical cols: {self.categorical_cols} and numeric cols: {self.numeric_cols}")
+            self.logger.info(
+                f"Auto-detected categorical cols: {self.categorical_cols} and numeric cols: {self.numeric_cols}"
+            )
 
         if add_temporal:
             df = self._add_temporal_features(df)
@@ -274,7 +298,9 @@ class TimeSeriesPreprocessor:
 
         # Determine final feature columns (exclude datetime and target)
         all_cols = df.columns.tolist()
-        self.feature_columns_after_encoding = [col for col in all_cols if col not in [self.target_col, self.datetime_col]]
+        self.feature_columns_after_encoding = [
+            col for col in all_cols if col not in [self.target_col, self.datetime_col]
+        ]
 
         X = df[self.feature_columns_after_encoding].values
         y = df[self.target_col].values
@@ -285,7 +311,10 @@ class TimeSeriesPreprocessor:
         df_processed[self.feature_columns_after_encoding] = X_scaled
         df_processed[self.target_col] = y_scaled
 
-        X_seq, y_seq = self._create_sequences(df_processed[self.feature_columns_after_encoding].values, df_processed[self.target_col].values)
+        X_seq, y_seq = self._create_sequences(
+            df_processed[self.feature_columns_after_encoding].values,
+            df_processed[self.target_col].values,
+        )
         return df_processed, X_seq, y_seq
 
     def transform(
@@ -294,7 +323,7 @@ class TimeSeriesPreprocessor:
         add_temporal: bool = True,
         add_fourier: bool = False,
         fourier_period: int = 365,
-        prediction_mode: bool = False
+        prediction_mode: bool = False,
     ) -> Tuple[pd.DataFrame, np.ndarray, Optional[np.ndarray]]:
         """
         Transform new (test/inference) data using the fitted preprocessing pipeline.
@@ -313,7 +342,9 @@ class TimeSeriesPreprocessor:
         if not prediction_mode and not target_present:
             raise ValueError("Target column is missing and prediction_mode is False.")
         elif prediction_mode and not target_present:
-            self.logger.info("Prediction mode: target column not found; proceeding without target.")
+            self.logger.info(
+                "Prediction mode: target column not found; proceeding without target."
+            )
 
         if add_temporal:
             df = self._add_temporal_features(df)
@@ -345,11 +376,15 @@ class TimeSeriesPreprocessor:
         if not target_present:
             y_scaled = None
 
-        X_seq, y_seq = self._create_sequences(df[self.feature_columns_after_encoding].values,
-                                               df[self.target_col].values if target_present else None)
+        X_seq, y_seq = self._create_sequences(
+            df[self.feature_columns_after_encoding].values,
+            df[self.target_col].values if target_present else None,
+        )
         return df, X_seq, y_seq
 
-    def split_data(self, df: pd.DataFrame, train_size: float = 0.8) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def split_data(
+        self, df: pd.DataFrame, train_size: float = 0.8
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Split a processed DataFrame into train and test sets.
         """
@@ -357,18 +392,20 @@ class TimeSeriesPreprocessor:
         return df.iloc[:split_idx].copy(), df.iloc[split_idx:].copy()
 
     def get_arrays(
-        self, 
-        df_train: pd.DataFrame, 
-        df_val: pd.DataFrame
+        self, df_train: pd.DataFrame, df_val: pd.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Create sequences from train and validation DataFrames and return arrays:
           X_train, X_val, y_train, y_val.
         """
-        X_train, y_train = self._create_sequences(df_train[self.feature_columns_after_encoding].values,
-                                                  df_train[self.target_col].values)
-        X_val, y_val = self._create_sequences(df_val[self.feature_columns_after_encoding].values,
-                                              df_val[self.target_col].values)
+        X_train, y_train = self._create_sequences(
+            df_train[self.feature_columns_after_encoding].values,
+            df_train[self.target_col].values,
+        )
+        X_val, y_val = self._create_sequences(
+            df_val[self.feature_columns_after_encoding].values,
+            df_val[self.target_col].values,
+        )
         return X_train, X_val, y_train, y_val
 
     def plot_time_series(
@@ -377,7 +414,7 @@ class TimeSeriesPreprocessor:
         start_date: Optional[Union[str, datetime]] = None,
         end_date: Optional[Union[str, datetime]] = None,
         freq: str = "D",
-        title: str = "Time Series Plot"
+        title: str = "Time Series Plot",
     ):
         """
         Plot the time-series target between start_date and end_date, resampling by frequency.
@@ -391,7 +428,7 @@ class TimeSeriesPreprocessor:
             plot_df = plot_df[plot_df[self.datetime_col] <= pd.to_datetime(end_date)]
         plot_df = plot_df.set_index(self.datetime_col)
         resampled = plot_df[self.target_col].resample(freq).mean()
-        plt.figure(figsize=(10,5))
+        plt.figure(figsize=(10, 5))
         plt.plot(resampled.index, resampled.values, marker="o", label=self.target_col)
         plt.title(title)
         plt.xlabel("Date")
@@ -413,15 +450,19 @@ if __name__ == "__main__":
     feat2 = np.random.randn(n_samples) * 5 + 50
     cat_feat = np.random.choice(["A", "B", "C"], size=n_samples)
     t = np.arange(n_samples)
-    target = 0.01 * t + 10 * np.sin(2 * np.pi * t / 365) + np.random.randn(n_samples) * 2
+    target = (
+        0.01 * t + 10 * np.sin(2 * np.pi * t / 365) + np.random.randn(n_samples) * 2
+    )
 
-    df_ts = pd.DataFrame({
-        "date": date_rng,
-        "feat1": feat1,
-        "feat2": feat2,
-        "cat_feat": cat_feat,
-        "target": target,
-    })
+    df_ts = pd.DataFrame(
+        {
+            "date": date_rng,
+            "feat1": feat1,
+            "feat2": feat2,
+            "cat_feat": cat_feat,
+            "target": target,
+        }
+    )
 
     print("=== Time Series Preprocessing (DataFrame) Demo ===")
     ts_processor = TimeSeriesPreprocessor(
@@ -436,23 +477,29 @@ if __name__ == "__main__":
         top_k_fourier=3,
         remove_na=True,
         data_format="dataframe",
-        auto_detect=False
+        auto_detect=False,
     )
 
     # Fit and transform training data; unpack processed DataFrame and sequences.
-    proc_df, X_seq, y_seq = ts_processor.fit_transform(df_ts, add_temporal=True, add_fourier=True, fourier_period=365)
+    proc_df, X_seq, y_seq = ts_processor.fit_transform(
+        df_ts, add_temporal=True, add_fourier=True, fourier_period=365
+    )
     print("Training sequences shapes:")
     print("X_seq:", X_seq.shape)  # Expected: [num_sequences, seq_length, D]
     print("y_seq:", y_seq.shape)  # Expected: [num_sequences, 1]
 
     # Test transform in prediction mode (without target column)
     df_ts_pred = df_ts.drop(columns=["target"])
-    pred_df, X_seq_pred, y_seq_pred = ts_processor.transform(df_ts_pred, add_temporal=True, add_fourier=False, prediction_mode=True)
+    pred_df, X_seq_pred, y_seq_pred = ts_processor.transform(
+        df_ts_pred, add_temporal=True, add_fourier=False, prediction_mode=True
+    )
     print("Prediction mode sequences shape (X):", X_seq_pred.shape)
     print("Prediction mode y_seq (should be None):", y_seq_pred)
 
     # 2) Split Data and Get Arrays
-    proc_df, _, _ = ts_processor.fit_transform(df_ts, add_temporal=True, add_fourier=True, fourier_period=365)
+    proc_df, _, _ = ts_processor.fit_transform(
+        df_ts, add_temporal=True, add_fourier=True, fourier_period=365
+    )
     train_df, test_df = ts_processor.split_data(proc_df, train_size=0.8)
     X_train, X_val, y_train, y_val = ts_processor.get_arrays(train_df, test_df)
     print("After splitting:")
@@ -465,6 +512,12 @@ if __name__ == "__main__":
     print("Plotting the target time series (entire period):")
     ts_processor.plot_time_series(proc_df, freq="D", title="Time Series (Daily)")
     print("Plotting a zoomed-in view (June-August 2020):")
-    ts_processor.plot_time_series(proc_df, start_date="2020-06-01", end_date="2020-08-01", freq="D", title="Zoomed-In Plot")
+    ts_processor.plot_time_series(
+        proc_df,
+        start_date="2020-06-01",
+        end_date="2020-08-01",
+        freq="D",
+        title="Zoomed-In Plot",
+    )
 
     print("\nAll tests completed successfully.")

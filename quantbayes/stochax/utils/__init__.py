@@ -6,7 +6,7 @@ from .viz import (
     visualize_block_circulant_layer,
     analyze_pre_activations,
     visualize_deterministic_fft,
-    visualize_deterministic_block_fft
+    visualize_deterministic_block_fft,
 )
 
 __all__ = [
@@ -18,5 +18,5 @@ __all__ = [
     "visualize_block_circulant_layer",
     "analyze_pre_activations",
     "visualize_deterministic_fft",
-    "visualize_deterministic_block_fft"
+    "visualize_deterministic_block_fft",
 ]

@@ -10,8 +10,10 @@ __all__ = [
     "CirculantProcess",
     "BlockCirculantProcess",
     "SpectralDenseBlock",
-    "FourierNeuralOperator1D"
+    "FourierNeuralOperator1D",
 ]
+
+
 class Circulant(eqx.Module):
     """
     A custom Equinox layer that implements a linear layer with a circulant matrix.
@@ -24,8 +26,9 @@ class Circulant(eqx.Module):
     The circulant multiplication is then computed via FFT:
       y = real( ifft( fft(x) * fft(first_col) ) ) + bias
     """
+
     first_row: jnp.ndarray  # shape (n,)
-    bias: jnp.ndarray       # shape (n,)
+    bias: jnp.ndarray  # shape (n,)
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
 
@@ -56,16 +59,17 @@ class BlockCirculant(eqx.Module):
     """
     Equinox module implementing a block-circulant weight matrix with bias.
 
-    - W is of shape (k_out, k_in, b), where each slice W[i, j] is the "first row" 
+    - W is of shape (k_out, k_in, b), where each slice W[i, j] is the "first row"
       of a circulant block.
     - D_bernoulli is an optional diagonal (of shape (in_features,)) with ±1 entries.
     - A bias vector of shape (out_features,) is added to the final output.
     - in_features and out_features are the overall input and output dimensions,
       possibly padded up to multiples of b.
     """
-    W: jnp.ndarray             # shape: (k_out, k_in, b)
-    D_bernoulli: jnp.ndarray   # shape: (in_features,)
-    bias: jnp.ndarray          # shape: (out_features,)
+
+    W: jnp.ndarray  # shape: (k_out, k_in, b)
+    D_bernoulli: jnp.ndarray  # shape: (in_features,)
+    bias: jnp.ndarray  # shape: (out_features,)
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
     block_size: int = eqx.static_field()
@@ -116,7 +120,7 @@ class BlockCirculant(eqx.Module):
             )
         else:
             diag_signs = jnp.ones((in_features,))
-            
+
         # Initialize bias if requested, shape (out_features,)
         if use_bias:
             bias_init = jr.normal(k3, (out_features,)) * init_scale
@@ -127,7 +131,9 @@ class BlockCirculant(eqx.Module):
         object.__setattr__(self, "D_bernoulli", diag_signs)
         object.__setattr__(self, "bias", bias_init)
 
-    def __call__(self, x: jnp.ndarray, *, key=None, state=None, **kwargs) -> jnp.ndarray:
+    def __call__(
+        self, x: jnp.ndarray, *, key=None, state=None, **kwargs
+    ) -> jnp.ndarray:
         """
         Forward pass for block-circulant multiplication with bias.
 
@@ -139,7 +145,7 @@ class BlockCirculant(eqx.Module):
         6. Reshape the result to (batch, k_out * block_size) and slice to (batch, out_features).
         7. Add the bias.
         """
-        single_example = (x.ndim == 1)
+        single_example = x.ndim == 1
         if single_example:
             x = x[None, :]  # add batch dimension
 
@@ -156,7 +162,9 @@ class BlockCirculant(eqx.Module):
         # (3) Zero-pad x_d if necessary.
         pad_len = k_in * b - d_in
         if pad_len > 0:
-            x_d = jnp.pad(x_d, ((0, 0), (0, pad_len)), mode="constant", constant_values=0.0)
+            x_d = jnp.pad(
+                x_d, ((0, 0), (0, pad_len)), mode="constant", constant_values=0.0
+            )
 
         # (4) Reshape into blocks.
         x_blocks = x_d.reshape(batch_size, k_in, b)
@@ -177,12 +185,17 @@ class BlockCirculant(eqx.Module):
                 x_j = x_blocks[:, j, :]  # (batch, b)
                 block_out = one_block_mul(w_ij, x_j)
                 return carry + block_out, None
+
             init = jnp.zeros((batch_size, b))
             out_time, _ = jax.lax.scan(sum_over_j, init, jnp.arange(k_in))
             return out_time  # shape (batch, b)
 
-        out_blocks = jax.vmap(compute_blockrow)(jnp.arange(k_out))  # shape (k_out, batch, b)
-        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(batch_size, k_out * b)
+        out_blocks = jax.vmap(compute_blockrow)(
+            jnp.arange(k_out)
+        )  # shape (k_out, batch, b)
+        out_reshaped = jnp.transpose(out_blocks, (1, 0, 2)).reshape(
+            batch_size, k_out * b
+        )
 
         # (6) Slice if needed.
         if k_out * b > d_out:
@@ -194,7 +207,8 @@ class BlockCirculant(eqx.Module):
         if single_example:
             out_final = out_final[0]
         return out_final
-    
+
+
 class CirculantProcess(eqx.Module):
     in_features: int = eqx.static_field()
     alpha: float = eqx.static_field()
@@ -287,6 +301,7 @@ class CirculantProcess(eqx.Module):
             )
         return self._last_fft_full
 
+
 class BlockCirculantProcess(eqx.Module):
     in_features: int = eqx.static_field()
     out_features: int = eqx.static_field()
@@ -314,7 +329,7 @@ class BlockCirculantProcess(eqx.Module):
         K=None,
         *,
         key,
-        init_scale=0.1
+        init_scale=0.1,
     ):
         self.in_features = in_features
         self.out_features = out_features
@@ -446,6 +461,7 @@ class BlockCirculantProcess(eqx.Module):
             )
         return self._last_fourier_coeffs
 
+
 class SpectralDenseBlock(eqx.Module):
     """
     A custom spectral dense block that:
@@ -454,9 +470,10 @@ class SpectralDenseBlock(eqx.Module):
       3. Applies inverse FFT (taking the real part),
       4. Applies a pointwise MLP (Linear -> ReLU -> Linear),
       5. Adds a residual connection.
-    
+
     This layer is defined for a single example with shape (in_features,).
     """
+
     in_features: int
     hidden_dim: int
     w_real: jnp.ndarray  # shape: (in_features,)
@@ -492,6 +509,7 @@ def make_mask(n: int, n_modes: int):
     mask = mask.at[-n_modes:].set(1.0)
     return mask
 
+
 class FourierNeuralOperator1D(eqx.Module):
     """
     A single Fourier layer that:
@@ -500,15 +518,16 @@ class FourierNeuralOperator1D(eqx.Module):
       3. Computes the inverse FFT,
       4. Applies a pointwise MLP (Linear -> ReLU -> Linear),
       5. And adds a residual connection.
-    
+
     This layer processes a single sample of shape (in_features,).
     """
+
     in_features: int
     hidden_dim: int
     n_modes: int
     spectral_weight: jnp.ndarray  # shape: (in_features,)
-    linear1: eqx.nn.Linear      # maps (in_features,) -> (hidden_dim,)
-    linear2: eqx.nn.Linear      # maps (hidden_dim,) -> (in_features,)
+    linear1: eqx.nn.Linear  # maps (in_features,) -> (hidden_dim,)
+    linear2: eqx.nn.Linear  # maps (hidden_dim,) -> (in_features,)
 
     def __init__(self, in_features: int, hidden_dim: int, n_modes: int, *, key):
         self.in_features = in_features
@@ -530,4 +549,3 @@ class FourierNeuralOperator1D(eqx.Module):
         h = jax.nn.relu(h)
         x_mlp = self.linear2(h)
         return x_ifft + x_mlp
-
