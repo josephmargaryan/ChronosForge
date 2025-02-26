@@ -111,35 +111,22 @@ Please see the notebooks in `examples/`
 <table>
   <tr>
     <td align="center">
-      <img src="images/kernel.png" alt="Kernel" style="max-width: 100%;"><br>
-      <b>Kernel</b><br>
-      <small>Reconstructed circulant kernel</small>
+      <img src="images/fourier.png" alt="Circulant Eigenvalues" style="max-width: 100%;"><br>
+      <b>Circulant Eigenvalues</b><br>
+      <small>Fourier Eigenvalue Decomposition</small>
     </td>
     <td align="center">
-      <img src="images/magnitude.png" alt="Magnitude" style="max-width: 100%;"><br>
-      <b>Magnitude</b><br>
-      <small>FFT magnitude visualization</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="images/kde.png" alt="KDE" style="max-width: 100%;"><br>
-      <b>KDE</b><br>
-      <small>Feature space with kernel density and mean predictions</small>
-    </td>
-    <td align="center">
-      <img src="images/posteriors.png" alt="Posteriors" style="max-width: 100%;"><br>
-      <b>Posteriors</b><br>
-      <small>95% confidence intervals with 30 random posterior samples</small>
-    </td>
-    <td align="center">
-      <img src="images/hdi.png" alt="HDI" style="max-width: 100%;"><br>
-      <b>HDI</b><br>
-      <small>High Density Interval plot</small>
+      <img src="images/spectral_model.png" alt="Fast Fourier Transform" style="max-width: 30%;"><br>
+      <b>Fast Fourier Transform</b><br>
+      <small>Function over Fourier eigenvalues</small>
     </td>
   </tr>
 </table>
 
+
+
+
+  
 
 
 ### Pac Analysis Bound 
@@ -282,18 +269,7 @@ $$
 
 where $f_{\text{drift}}$ and $f_{\text{diffusion}}$ are linear functions learned during training. This allows the model to capture more complex dynamics while retaining interpretability.
 
-<table>
-  <tr>
-    <td align="center">
-      <img src="images/sde.png" alt="SDE" width="300"><br>
-      SDE
-    </td>
-    <td align="center">
-      <img src="images/stock_price_forecasting.png" alt="Stock Price Forecasting" width="300"><br>
-      Stock Price Forecasting
-    </td>
-  </tr>
-</table>
+
 
 ---
 
