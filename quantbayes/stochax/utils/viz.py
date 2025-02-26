@@ -433,34 +433,30 @@ def _get_fft_samples(model, X):
     return np.stack(fft_list, axis=0)
 
 
+def _get_block_fft_samples(model, X):
+
+    posterior_samples = model.get_samples
+    param_dict = {key: value[0] for key, value in posterior_samples.items() if key != "logits"}
+    fft_full_blocks = get_block_fft_full_for_given_params(model, X, param_dict, rng_key=jr.PRNGKey(123))
+    fft_list_blocks = []
+    n_samples = 50
+    for i in range(n_samples):
+        sample_param_dict = {key: value[i] for key, value in posterior_samples.items() if key != "logits"}
+        fft_sample_block = get_block_fft_full_for_given_params(model, X, sample_param_dict, rng_key=jr.PRNGKey(i))
+        fft_list_blocks.append(fft_sample_block)
+
+        
+    fft_samples_blocks = np.stack(fft_list_blocks, axis=0)
+    return fft_samples_blocks
+
+    
+
+
 def visualize_circulant_layer(model, X, show=True):
     """
     Visualizes the FFT spectrum (magnitude and phase) and the time-domain circulant kernel.
     If fft_samples has multiple samples, uncertainty (e.g., 95% CI) is shown.
-
-    Example Usage:
-    from quantbayes.stochax.utils import get_fft_full_for_given_params, visualize_circulant_layer
-    # Optionally Trigger the FFT layer's forward pass to update its stored coefficients.
-    _ = net.fft_layer(x)
-    posterior_samples = model.get_samples
-    param_dict = {key: value[0] for key, value in posterior_samples.items()}
-
-    # (2) Perform a forward pass to get the FFT coefficients for the circulant layer.
-    fft_full = get_fft_full_for_given_params(model, X_test, param_dict, rng_key=jr.PRNGKey(0))
-
-    # (3) To visualize uncertainty, loop over multiple posterior samples:
-    fft_list = []
-    n_samples = 50
-    for i in range(n_samples):
-        sample_param_dict = {key: value[i] for key, value in posterior_samples.items()}
-        fft_sample = get_fft_full_for_given_params(model, X_test, sample_param_dict, rng_key=jr.PRNGKey(i))
-        fft_list.append(fft_sample)
-
-    # Convert the list to a NumPy array: shape (n_samples, n)
-    fft_samples = np.stack(fft_list, axis=0)
-
-    # (4) Call the high-level visualization function.
-    fig_fft, fig_kernel = visualize_circulant_layer(fft_samples, show=True)
+    
     """
     fft_samples = _get_fft_samples(model, X)
     # Compute statistics (mean, lower, upper bounds) for FFT spectrum.
@@ -475,35 +471,13 @@ def visualize_circulant_layer(model, X, show=True):
     return fig1, fig2
 
 
-def visualize_block_circulant_layer(fft_samples_blocks: np.ndarray, show=True):
+def visualize_block_circulant_layer(model, X, show=True):
     """
     Visualizes the FFT spectra, phase, time-domain kernels, and full circulant matrices for each block.
-    Example Usage:
 
-    from quantbayes.stochax.utils import get_block_fft_full_for_given_params, visualize_block_circulant_layer
-
-    posterior_samples = model.get_samples
-
-    param_dict = {key: value[0] for key, value in posterior_samples.items() if key != "logits"}
-
-    # (2) Perform a forward pass to get the FFT coefficients for the block–circulant layer.
-    fft_full_blocks = get_block_fft_full_for_given_params(model, X_test, param_dict, rng_key=jr.PRNGKey(123))
-
-    # (3) To collect multiple samples:
-    fft_list_blocks = []
-    n_samples = 50
-    for i in range(n_samples):
-        sample_param_dict = {key: value[i] for key, value in posterior_samples.items() if key != "logits"}
-        fft_sample_block = get_block_fft_full_for_given_params(model, X_test, sample_param_dict, rng_key=jr.PRNGKey(i))
-        fft_list_blocks.append(fft_sample_block)
-
-    # Convert the list to a NumPy array: shape (n_samples, k_out, k_in, block_size)
-    fft_samples_blocks = np.stack(fft_list_blocks, axis=0)
-
-    # (4) Call the high-level block visualization function.
-    fig_fft_mag, fig_fft_phase, fig_kernel, fig_circ = visualize_block_circulant_layer(fft_samples_blocks, show=True)
     """
     # FFT spectra with uncertainty.
+    fft_samples_blocks = _get_block_fft_samples(model, X)
     fig1, fig2 = plot_block_fft_spectra_with_uncertainty(fft_samples_blocks, show=False)
     # Time-domain kernels with uncertainty.
     fig3 = visualize_block_circulant_kernels_with_uncertainty(
