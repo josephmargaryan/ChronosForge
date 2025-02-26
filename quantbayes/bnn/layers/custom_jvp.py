@@ -357,7 +357,7 @@ def spectral_circulant_matmul_jvp(primals, tangents):
 class JVPCirculantProcess:
     """
     NumPyro-based spectral circulant layer that uses a custom JVP rule.
-
+    
     Fourier coefficients (half-spectrum) are sampled via numpyro.sample.
     The FFT-based multiplication is performed via a custom_jvp-decorated function,
     reusing FFT computations in the backward pass.
@@ -386,14 +386,21 @@ class JVPCirculantProcess:
         self.K = K
 
         self.prior_fn = prior_fn if prior_fn is not None else (lambda scale: dist.Normal(0.0, scale))
+        self._last_fft_full = None  # Will store the full Fourier mask
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         # Compute frequency-dependent scales.
         freq_idx = jnp.arange(self.k_half)
         prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**self.alpha)
         active_idx = jnp.arange(self.K)
-        active_real = numpyro.sample(f"{self.name}_real", self.prior_fn(prior_std[active_idx]).expand([self.K]).to_event(1))
-        active_imag = numpyro.sample(f"{self.name}_imag", self.prior_fn(prior_std[active_idx]).expand([self.K]).to_event(1))
+        active_real = numpyro.sample(
+            f"{self.name}_real",
+            self.prior_fn(prior_std[active_idx]).expand([self.K]).to_event(1)
+        )
+        active_imag = numpyro.sample(
+            f"{self.name}_imag",
+            self.prior_fn(prior_std[active_idx]).expand([self.K]).to_event(1)
+        )
         
         full_real = jnp.zeros((self.k_half,))
         full_imag = jnp.zeros((self.k_half,))
@@ -411,8 +418,17 @@ class JVPCirculantProcess:
         else:
             fft_full = jnp.concatenate([half_complex, jnp.conjugate(half_complex[1:])[::-1]])
         
+        self._last_fft_full = jax.lax.stop_gradient(fft_full)
+        
         # Use the custom_jvp function for FFT-based multiplication.
         return spectral_circulant_matmul(x, fft_full)
+    
+    def get_fourier_coeffs(self) -> jnp.ndarray:
+        if self._last_fft_full is None:
+            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
+        return self._last_fft_full
+
+# ------------------------------------------------------------------
 
 class JVPBlockCirculantProcess:
     """
@@ -423,7 +439,7 @@ class JVPBlockCirculantProcess:
     
          out = block_circulant_matmul_custom(W, X, D) + bias
          
-    where block_circulant_matmul_custom (with its custom JVP definition) saves FFT calls.
+    where block_circulant_matmul_custom (with its custom JVP definition) reuses FFT computations.
     """
     def __init__(
         self,
@@ -442,11 +458,17 @@ class JVPBlockCirculantProcess:
         # Determine block counts.
         self.k_in = (in_features + block_size - 1) // block_size
         self.k_out = (out_features + block_size - 1) // block_size
+        self.b = block_size
         self.W_prior_fn = W_prior_fn
         self.bias_prior_fn = bias_prior_fn
         self.use_diag = use_diag
+        self._last_block_fft = None  # Will store the full block FFT coefficients
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
+        if X.ndim == 1:
+            X = X[None, :]
+        bs, d_in = X.shape
+
         # Sample block-circulant parameters.
         W = numpyro.sample(
             f"{self.name}_W",
@@ -464,7 +486,32 @@ class JVPBlockCirculantProcess:
         else:
             D = None
 
-        # Compute the block-circulant multiplication using the custom JVP function.
+        # Reconstruct full block FFT coefficients from W, similar to the non-JVP version.
+        # For each block (i, j) in W, we reconstruct the FFT over the block.
+        def reconstruct_fft(r_ij):
+            # r_ij: a vector of length block_size (assumed real-valued Fourier parameters)
+            k_half = self.block_size // 2 + 1
+            # Here we assume that W contains the active Fourier coefficients;
+            # for simplicity, we assume full spectrum reconstruction.
+            # (Adjust if you use truncation like in the CirculantProcess.)
+            # Enforce the DC component to be real:
+            r_ij = r_ij.at[0].set(r_ij[0])
+            half_complex = r_ij.astype(jnp.complex64)  # assume imaginary part is zero
+            if (self.block_size % 2 == 0) and (k_half > 1):
+                nyquist = half_complex[-1].real[None]
+                block_fft = jnp.concatenate([half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]])
+            else:
+                block_fft = jnp.concatenate([half_complex, jnp.conjugate(half_complex[1:])[::-1]])
+            return block_fft
+
+        # Apply reconstruction per block entry; here we mimic the original vmap structure.
+        # In practice, if W represents Fourier coefficients for each block, you can adjust this as needed.
+        block_fft_full = jax.vmap(
+            lambda row: jax.vmap(reconstruct_fft)(row)
+        )(W)
+        self._last_block_fft = jax.lax.stop_gradient(block_fft_full)
+
+        # Compute block-circulant multiplication via the custom JVP function.
         out = block_circulant_matmul_custom(W, X, D)
         # Sample and add bias.
         b = numpyro.sample(
@@ -474,3 +521,8 @@ class JVPBlockCirculantProcess:
         if self.k_out * self.block_size > self.out_features:
             out = out[..., :self.out_features]
         return out + b[None, :]
+
+    def get_fourier_coeffs(self) -> jnp.ndarray:
+        if self._last_block_fft is None:
+            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
+        return self._last_block_fft

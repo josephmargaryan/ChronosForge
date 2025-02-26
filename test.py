@@ -8,8 +8,7 @@ import numpyro
 import numpyro.distributions as dist
 from sklearn.model_selection import train_test_split 
 from sklearn.metrics import mean_squared_error
-import arviz as az
-import warnings
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from quantbayes import bnn
 from quantbayes.bnn.utils import evaluate_mcmc
@@ -20,25 +19,30 @@ df = generate_regression_data(n_continuous=3)
 X, y = df.drop("target", axis=1), df["target"]
 X, y = jnp.array(X), jnp.array(y)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+target_scaler = MinMaxScaler()
+feature_scaler = StandardScaler()
+y_train_scaled = target_scaler.fit_transform(y_train.reshape(-1, 1)).ravel 
+y_test_scaled = target_scaler.transform(y_test.reshape(-1, 1)).ravel
+X_train_scaled = feature_scaler.fit_transform(X_train)
+X_test_scaled = feature_scaler.transform(X_test)
+
 
 class Test(bnn.Module):
-    def __init__(self, alpha: float, K: int, prior: any):
+    def __init__(self):
         super().__init__()
-        self.alpha = alpha
-        self.K = K
-        self.prior = prior
     def __call__(self, X, y=None):
         N, D = X.shape
-        X = bnn.CirculantProcess(
+        X = bnn.JVPCirculant(
             in_features=D,
-            alpha=self.alpha,
-            K=self.K,
-            prior_fn=self.prior
+            first_row_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
+            bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1)
             )(X)
         X = jax.nn.tanh(X)
-        X = bnn.Linear(5, 1, name="out")(X)
+        X = bnn.Linear(D, 1, name="out")(X)
         mu = X.squeeze()
-        numpyro.sample("obs", dist.Normal(mu), obs=y)
+        sigma = numpyro.sample("sigma", dist.Exponential(1.0))
+        with numpyro.plate("data", N):
+          numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
 
 def aggregate_diagnostics(diag_list):
     # Get all keys from the first diagnostic dictionary.
@@ -70,17 +74,18 @@ for seed in seeds:
     key = jr.PRNGKey(seed)
     k1, k2 = jr.split(key, 2)
     model = Test()
-    # For debugging/testing, we use 2 chains, 500 warmup, 1000 samples.
-    model.compile(num_chains=2, num_warmup=500, num_samples=1000)
+    model.compile(num_chains=4, num_warmup=1000, num_samples=1000)
     start_time = time.time()
-    model.fit(X_train, y_train, k1)
+    model.fit(X_train_scaled, y_train_scaled, k1)
     end_time = time.time()
     run_time = end_time - start_time
     
-    preds = model.predict(X_test, posterior="obs", rng_key=k2)
+    preds = model.predict(X_test_scaled, posterior="obs", rng_key=k2)
     # Compute mean prediction across chains/samples
     mean_preds = np.array(preds).mean(axis=0)
-    rmse = np.sqrt(mean_squared_error(np.array(y_test), mean_preds))
+    mean_preds = target_scaler.inverse_transform(mean_preds.reshape(-1, 1)).reshape(-1)
+    targets = target_scaler.inverse_transform(y_test_scaled.reshape(-1, 1)).reshape(-1)
+    rmse = np.sqrt(mean_squared_error(np.array(targets), mean_preds))
     
     diagnostics = evaluate_mcmc(model)
     

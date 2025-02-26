@@ -8,13 +8,30 @@ import numpyro
 import numpyro.distributions as dist
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from quantbayes.fake_data import generate_regression_data
 
 # Generate synthetic regression data
 df = generate_regression_data(n_continuous=3)
 X, y = df.drop("target", axis=1), df["target"]
 X, y = jnp.array(X), jnp.array(y)
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+target_scaler = MinMaxScaler()
+feature_scaler = StandardScaler()
+y_train_scaled = target_scaler.fit_transform(y_train.reshape(-1, 1)).ravel 
+y_test_scaled = target_scaler.transform(y_test.reshape(-1, 1)).ravel
+X_train_scaled = feature_scaler.fit_transform(X_train)
+X_test_scaled = feature_scaler.transform(X_test)
+
+import time
+import numpy as np
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+from quantbayes import bnn
+import numpyro
+import numpyro.distributions as dist
+from sklearn.metrics import mean_squared_error
 
 # Define the model class.
 class Test(bnn.Module):
@@ -25,16 +42,16 @@ class Test(bnn.Module):
 
     def __call__(self, X, y=None):
         N, D = X.shape
-        # Apply the circulant layer.
-        X = bnn.Circulant(
+        X = bnn.JVPCirculant(
             in_features=D,
             first_row_prior_fn=self.prior
         )(X)
-        # Use the provided activation function.
         X = self.activation(X)
         X = bnn.Linear(D, 1, name="out")(X)
         mu = X.squeeze()
-        numpyro.sample("obs", dist.Normal(mu), obs=y)
+        sigma = numpyro.sample("sigma", dist.Exponential(1.0))
+        with numpyro.plate("data", N):
+          numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
 
 # Wrap prior functions to accept extra keyword arguments.
 def gaussian_prior(shape, **kwargs):
@@ -58,7 +75,7 @@ activations = {
     "GELU": jax.nn.gelu
 }
 
-def hyperparameter_tuning(X_train, y_train, X_val, y_val, priors, activations, seed=0):
+def hyperparameter_tuning(X_train, y_train, X_test, y_test, priors, activations, seed=0):
     best_rmse = float('inf')
     best_config = None
     tuning_results = []
@@ -66,23 +83,22 @@ def hyperparameter_tuning(X_train, y_train, X_val, y_val, priors, activations, s
     for prior_name, prior_fn in priors.items():
         for act_name, act_fn in activations.items():
             print(f"Evaluating configuration: prior={prior_name}, activation={act_name}")
-            # Use the same key for consistency.
             key = jr.PRNGKey(seed)
-            # Instantiate the model with the current hyperparameters.
             model = Test(prior=prior_fn, activation=act_fn)
-            # Compile the model (using 1 chain, 500 warmup, 1000 samples for tuning).
-            model.compile(num_chains=1, num_warmup=10, num_samples=10)
+            model.compile(num_chains=1, num_warmup=300, num_samples=800)
 
             start_time = time.time()
             model.fit(X_train, y_train, key)
-            end_time = time.time()
-            run_time = end_time - start_time
+            run_time = time.time() - start_time
 
-            # Generate predictions on the validation set.
             k1, k2 = jr.split(key, 2)
-            preds = model.predict(X_val, posterior="obs", rng_key=k2)
+            preds = model.predict(X_test, posterior="obs", rng_key=k2)
             mean_preds = np.array(preds).mean(axis=0)
-            rmse = np.sqrt(mean_squared_error(np.array(y_val), mean_preds))
+
+            # Inverse-transform predictions and true test targets to original scale.
+            mean_preds_unscaled = target_scaler.inverse_transform(mean_preds.reshape(-1, 1)).reshape(-1)
+            y_test_unscaled = target_scaler.inverse_transform(y_test.reshape(-1, 1)).reshape(-1)
+            rmse = np.sqrt(mean_squared_error(y_test_unscaled, mean_preds_unscaled))
 
             config = {
                 "prior": prior_name,
@@ -99,8 +115,11 @@ def hyperparameter_tuning(X_train, y_train, X_val, y_val, priors, activations, s
 
     return best_config, tuning_results
 
-# Run hyperparameter tuning
-best_config, tuning_results = hyperparameter_tuning(X_train, y_train, X_val, y_val, priors, activations, seed=0)
+# Run hyperparameter tuning using the pre-scaled train and test data.
+# (X_train_scaled, y_train_scaled, X_test_scaled, and y_test_scaled should already be defined.)
+best_config, tuning_results = hyperparameter_tuning(
+    X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled, priors, activations, seed=0
+)
 
 print("\nBest Hyperparameter Configuration:")
 print(best_config)

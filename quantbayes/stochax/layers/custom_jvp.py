@@ -387,26 +387,25 @@ class JVPCirculantProcess(eqx.Module):
     w_real: jnp.ndarray  # shape (k_half,)
     w_imag: jnp.ndarray  # shape (k_half,)
 
+    # Store the last computed full FFT mask for retrieval.
+    _last_fft_full: jnp.ndarray = eqx.field(default=None, repr=False)
+
     def __init__(self, in_features: int, padded_dim: Optional[int] = None, alpha: float = 1.0, K: int = None, *, key):
         self.in_features = in_features
-        # If padded_dim is not provided, default to in_features (no padding).
         self.padded_dim = padded_dim if padded_dim is not None else in_features
         self.alpha = alpha
         self.k_half = self.padded_dim // 2 + 1
 
-        # If K is not specified or exceeds k_half, default to k_half.
         if (K is None) or (K > self.k_half):
             K = self.k_half
         self.K = K
 
         key_r, key_i = jr.split(key)
-        # Initialize the Fourier coefficients.
         self.w_real = jr.normal(key_r, (self.k_half,)) * 0.1
         self.w_imag = jr.normal(key_i, (self.k_half,)) * 0.1
 
-        # Zero out the imaginary part for DC.
+        # Ensure the DC component is real.
         self.w_imag = self.w_imag.at[0].set(0.0)
-        # For even padded_dim and k_half > 1, ensure Nyquist frequency is real.
         if (self.padded_dim % 2 == 0) and (self.k_half > 1):
             self.w_imag = self.w_imag.at[-1].set(0.0)
 
@@ -420,7 +419,14 @@ class JVPCirculantProcess(eqx.Module):
             fft_full = jnp.concatenate([half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]])
         else:
             fft_full = jnp.concatenate([half_complex, jnp.conjugate(half_complex[1:])[::-1]])
+        # Store for later retrieval.
+        object.__setattr__(self, "_last_fft_full", fft_full)
         return spectral_circulant_matmul(x, fft_full)
+    
+    def get_fourier_coeffs(self) -> jnp.ndarray:
+        if self._last_fft_full is None:
+            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
+        return self._last_fft_full
 
 class JVPBlockCirculantProcess(eqx.Module):
     """
@@ -442,6 +448,9 @@ class JVPBlockCirculantProcess(eqx.Module):
     k_in: int = eqx.static_field()
     k_out: int = eqx.static_field()
 
+    # Store the last computed full block FFT coefficients.
+    _last_block_fft: jnp.ndarray = eqx.field(default=None, repr=False)
+
     def __init__(
         self,
         in_features: int,
@@ -456,11 +465,9 @@ class JVPBlockCirculantProcess(eqx.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.block_size = block_size
-        # Determine the number of blocks along the input and output dimensions.
         self.k_in = (in_features + block_size - 1) // block_size
         self.k_out = (out_features + block_size - 1) // block_size
 
-        # Initialize block parameters.
         k1, k2, k3 = jr.split(key, 3)
         self.W = jr.normal(k1, (self.k_out, self.k_in, block_size)) * init_scale
 
@@ -476,12 +483,17 @@ class JVPBlockCirculantProcess(eqx.Module):
             self.bias = jnp.zeros((out_features,))
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # The custom JVP-enabled function is assumed to be defined elsewhere.
+        # Assume block_circulant_matmul_custom is defined elsewhere with a custom JVP rule.
         out = block_circulant_matmul_custom(self.W, x, self.D_bernoulli)
-        # If the effective output dimension (k_out * block_size) is larger than out_features, slice.
         if self.k_out * self.block_size > self.out_features:
             out = out[..., :self.out_features]
-        # Add bias (broadcasting if needed).
         if out.ndim == 1:
-            return out + self.bias
-        return out + self.bias[None, :]
+            out = out + self.bias
+        else:
+            out = out + self.bias[None, :]
+        return out
+
+    def get_fourier_coeffs(self) -> jnp.ndarray:
+        if self._last_block_fft is None:
+            raise ValueError("No Fourier coefficients available. Call the layer on some input first.")
+        return self._last_block_fft
