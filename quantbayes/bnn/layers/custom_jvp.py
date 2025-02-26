@@ -430,95 +430,214 @@ class JVPCirculantProcess:
 
 # ------------------------------------------------------------------
 
+# ----------------------------------------------------------------
+# Custom JVP function for block–circulant multiplication in the frequency domain.
+@jax.custom_jvp
+def block_circulant_spectral_matmul_custom(fft_full: jnp.ndarray, x: jnp.ndarray, d_bernoulli: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+    """
+    Multiply input x by a block–circulant operator whose full Fourier mask is given by fft_full.
+    
+    fft_full: shape (k_out, k_in, b), representing the full FFT for each block.
+    x: shape (batch, d_in) or (d_in,)
+    d_bernoulli: optional diagonal (of ±1) to decorrelate projections.
+    
+    This function works entirely in the frequency domain and is decorated with a custom JVP.
+    """
+    # Ensure x is 2D.
+    if x.ndim == 1:
+        x = x[None, :]
+    bs, d_in = x.shape
+    k_out, k_in, b = fft_full.shape
+
+    if d_bernoulli is not None:
+        x = x * d_bernoulli[None, :]
+
+    # Zero-pad x to length k_in * b if needed.
+    pad_len = k_in * b - d_in
+    if pad_len > 0:
+        x = jnp.pad(x, ((0, 0), (0, pad_len)))
+    # Reshape into blocks: (bs, k_in, b)
+    x_blocks = x.reshape(bs, k_in, b)
+    
+    # Compute FFT over the blocks.
+    X_fft = jnp.fft.fft(x_blocks, axis=-1)
+    # Multiply: for each output block row i, sum over j:
+    # Y_fft[:, i, :] = sum_j [X_fft[:, j, :] * conj(fft_full[i, j, :])]
+    Y_fft = jnp.sum(X_fft[:, None, :, :] * jnp.conjugate(fft_full)[None, :, :, :], axis=2)
+    # Inverse FFT per block and reshape.
+    Y = jnp.fft.ifft(Y_fft, axis=-1).real
+    out = Y.reshape(bs, k_out * b)
+    return out
+
+@block_circulant_spectral_matmul_custom.defjvp
+def block_circulant_spectral_matmul_custom_jvp(primals, tangents):
+    fft_full, x, d_bernoulli = primals
+    dfft, dx, dd = tangents  # dd is for d_bernoulli (we can ignore it for now)
+
+    # Forward pass (as above).
+    if x.ndim == 1:
+        x = x[None, :]
+    bs, d_in = x.shape
+    k_out, k_in, b = fft_full.shape
+    if d_bernoulli is not None:
+        x_eff = x * d_bernoulli[None, :]
+    else:
+        x_eff = x
+    pad_len = k_in * b - d_in
+    if pad_len > 0:
+        x_eff = jnp.pad(x_eff, ((0,0), (0, pad_len)))
+    x_blocks = x_eff.reshape(bs, k_in, b)
+    FFT_x = jnp.fft.fft(x_blocks, axis=-1)
+    FFT_full = fft_full  # Already in Fourier domain.
+    Y_fft = jnp.sum(FFT_x[:, None, :, :] * jnp.conjugate(FFT_full)[None, :, :, :], axis=2)
+    primal_out = jnp.fft.ifft(Y_fft, axis=-1).real.reshape(bs, k_out * b)
+    
+    # Compute directional derivatives.
+    # For dx:
+    if dx is None:
+        dX_fft = 0.0
+    else:
+        dx_eff = dx * d_bernoulli[None, :] if d_bernoulli is not None else dx
+        if pad_len > 0:
+            dx_eff = jnp.pad(dx_eff, ((0,0),(0,pad_len)))
+        dx_blocks = dx_eff.reshape(bs, k_in, b)
+        dX_fft = jnp.fft.fft(dx_blocks, axis=-1)
+    
+    # For dfft:
+    if dfft is None:
+        dFFT = 0.0
+    else:
+        dFFT = jnp.fft.fft(dfft, axis=-1)
+    
+    dY_fft = jnp.sum(
+        dX_fft[:, None, :, :] * jnp.conjugate(FFT_full)[None, :, :, :]
+        + FFT_x[:, None, :, :] * jnp.conjugate(dFFT)[None, :, :, :],
+        axis=2,
+    )
+    tangent_out = jnp.fft.ifft(dY_fft, axis=-1).real.reshape(bs, k_out * b)
+    if x.ndim == 1:
+        return primal_out[0], tangent_out[0]
+    return primal_out, tangent_out
+
+# ----------------------------------------------------------------
+# Frequency–domain block circulant layer with custom JVP.
 class JVPBlockCirculantProcess:
     """
-    NumPyro-based block-circulant layer that uses a custom JVP rule to accelerate gradients.
+    JVP version of BlockCirculantProcess: a frequency–domain block-circulant layer
+    that is identical to BlockCirculantProcess except that it uses a custom JVP–decorated
+    multiplication routine (block_circulant_spectral_matmul_custom) to speed up gradients.
     
-    In the forward pass, it samples block parameters and (optionally) a Bernoulli diagonal,
-    and then computes:
-    
-         out = block_circulant_matmul_custom(W, X, D) + bias
-         
-    where block_circulant_matmul_custom (with its custom JVP definition) reuses FFT computations.
+    Each b x b block is parameterized by a half-spectrum with frequency-dependent prior scale
+    and optional truncation. A custom prior on the Fourier coefficients can be specified via
+    `prior_fn` (default: Gaussian). If `alpha` is None, a prior is placed on it using `alpha_prior`
+    (default: Gamma(2.0, 1.0)).
     """
     def __init__(
         self,
         in_features: int,
         out_features: int,
         block_size: int,
-        name: str = "block_circ_layer",
-        W_prior_fn = lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
-        bias_prior_fn = lambda shape: dist.Normal(0, 1).expand(shape).to_event(1),
-        use_diag: bool = True,
+        alpha: float = 1.0,  # if set to None, a prior will be placed on alpha
+        alpha_prior=None,     # custom prior for alpha (if alpha is None)
+        K: int = None,
+        name: str = "smooth_trunc_block_circ_spectral",
+        prior_fn=None,        # callable to return a distribution given a scale
     ):
         self.in_features = in_features
         self.out_features = out_features
         self.block_size = block_size
+        self.alpha = alpha
+        # Use the provided alpha_prior if given, else default to Gamma(2.0, 1.0)
+        self.alpha_prior = alpha_prior if alpha_prior is not None else dist.Gamma(2.0, 1.0)
         self.name = name
-        # Determine block counts.
+
         self.k_in = (in_features + block_size - 1) // block_size
         self.k_out = (out_features + block_size - 1) // block_size
         self.b = block_size
-        self.W_prior_fn = W_prior_fn
-        self.bias_prior_fn = bias_prior_fn
-        self.use_diag = use_diag
-        self._last_block_fft = None  # Will store the full block FFT coefficients
+        self.k_half = (block_size // 2) + 1
+        if (K is None) or (K > self.k_half):
+            K = self.k_half
+        self.K = K
+
+        self.prior_fn = (
+            prior_fn
+            if prior_fn is not None
+            else (lambda scale: dist.Normal(0.0, scale))
+        )
+        self._last_block_fft = None  # will store the full block Fourier mask
 
     def __call__(self, X: jnp.ndarray) -> jnp.ndarray:
         if X.ndim == 1:
             X = X[None, :]
         bs, d_in = X.shape
 
-        # Sample block-circulant parameters.
-        W = numpyro.sample(
-            f"{self.name}_W",
-            self.W_prior_fn([self.k_out, self.k_in, self.block_size]),
+        # If alpha is None, sample it using the provided alpha prior.
+        alpha = (
+            numpyro.sample(f"{self.name}_alpha", self.alpha_prior)
+            if self.alpha is None
+            else self.alpha
         )
-        # Optionally sample the Bernoulli diagonal.
-        if self.use_diag:
-            D = numpyro.sample(
-                f"{self.name}_D",
-                dist.TransformedDistribution(
-                    dist.Bernoulli(0.5).expand([self.in_features]).to_event(1),
-                    [transforms.AffineTransform(loc=-1.0, scale=2.0)]
-                ),
-            )
-        else:
-            D = None
+        # Frequency-dependent scale.
+        freq_idx = jnp.arange(self.k_half)
+        prior_std = 1.0 / jnp.sqrt(1.0 + freq_idx**alpha)
+        active_indices = jnp.arange(self.K)
+        n_active = self.K
 
-        # Reconstruct full block FFT coefficients from W, similar to the non-JVP version.
-        # For each block (i, j) in W, we reconstruct the FFT over the block.
-        def reconstruct_fft(r_ij):
-            # r_ij: a vector of length block_size (assumed real-valued Fourier parameters)
-            k_half = self.block_size // 2 + 1
-            # Here we assume that W contains the active Fourier coefficients;
-            # for simplicity, we assume full spectrum reconstruction.
-            # (Adjust if you use truncation like in the CirculantProcess.)
-            # Enforce the DC component to be real:
-            r_ij = r_ij.at[0].set(r_ij[0])
-            half_complex = r_ij.astype(jnp.complex64)  # assume imaginary part is zero
-            if (self.block_size % 2 == 0) and (k_half > 1):
-                nyquist = half_complex[-1].real[None]
-                block_fft = jnp.concatenate([half_complex[:-1], nyquist, jnp.conjugate(half_complex[1:-1])[::-1]])
+        # Sample Fourier coefficients for active frequencies.
+        active_scale = prior_std[active_indices]
+        active_real = numpyro.sample(
+            f"{self.name}_real",
+            self.prior_fn(active_scale)
+            .expand([self.k_out, self.k_in, n_active])
+            .to_event(3),
+        )
+        active_imag = numpyro.sample(
+            f"{self.name}_imag",
+            self.prior_fn(active_scale)
+            .expand([self.k_out, self.k_in, n_active])
+            .to_event(3),
+        )
+
+        # Build full coefficient arrays for each block.
+        real_coeff = jnp.zeros((self.k_out, self.k_in, self.k_half))
+        imag_coeff = jnp.zeros((self.k_out, self.k_in, self.k_half))
+        real_coeff = real_coeff.at[..., active_indices].set(active_real)
+        imag_coeff = imag_coeff.at[..., active_indices].set(active_imag)
+
+        # Enforce DC component to be real.
+        imag_coeff = imag_coeff.at[..., 0].set(0.0)
+        if (self.b % 2 == 0) and (self.k_half > 1):
+            imag_coeff = imag_coeff.at[..., -1].set(0.0)
+
+        # Reconstruct the full block-level FFT for each (i,j) block.
+        def reconstruct_fft(r_ij, i_ij):
+            half_c = r_ij + 1j * i_ij
+            if (self.b % 2 == 0) and (self.k_half > 1):
+                nyquist = half_c[-1].real[None]
+                block_fft = jnp.concatenate(
+                    [half_c[:-1], nyquist, jnp.conjugate(half_c[1:-1])[::-1]]
+                )
             else:
-                block_fft = jnp.concatenate([half_complex, jnp.conjugate(half_complex[1:])[::-1]])
+                block_fft = jnp.concatenate([half_c, jnp.conjugate(half_c[1:])[::-1]])
             return block_fft
 
-        # Apply reconstruction per block entry; here we mimic the original vmap structure.
-        # In practice, if W represents Fourier coefficients for each block, you can adjust this as needed.
         block_fft_full = jax.vmap(
-            lambda row: jax.vmap(reconstruct_fft)(row)
-        )(W)
+            lambda Rrow, Irow: jax.vmap(reconstruct_fft)(Rrow, Irow),
+            in_axes=(0, 0),
+        )(real_coeff, imag_coeff)
         self._last_block_fft = jax.lax.stop_gradient(block_fft_full)
 
-        # Compute block-circulant multiplication via the custom JVP function.
-        out = block_circulant_matmul_custom(W, X, D)
+        # Zero-pad and reshape X into blocks is handled inside the custom JVP multiplication.
+        # Use the custom JVP spectral multiplication.
+        out = block_circulant_spectral_matmul_custom(self._last_block_fft, X)
+        
         # Sample and add bias.
         b = numpyro.sample(
             f"{self.name}_bias",
-            self.bias_prior_fn([self.out_features]),
+            dist.Normal(0, 1).expand([self.out_features]).to_event(1)
         )
-        if self.k_out * self.block_size > self.out_features:
+        # If the padded output dimension is larger than out_features, slice it.
+        if self.k_out * self.b > self.out_features:
             out = out[..., :self.out_features]
         return out + b[None, :]
 
