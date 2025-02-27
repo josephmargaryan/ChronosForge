@@ -8,6 +8,7 @@ from .models.temporal_conv import TCNForecast
 from .models.temporal_fusion import TemporalFusionTransformerForecast
 from .models.timegpt import TimeGPTForecast
 from .models.wave_net import WaveNetForecast
+from .models.spectral_tft import SpectralTemporalFusionTransformer
 
 from .forecast import ForecastingModel
 
@@ -24,4 +25,5 @@ __all__ = [
     "TimeGPTForecast",
     "WaveNetForecast",
     "ForecastingModel",
+    "SpectralTemporalFusionTransformer"
 ]
