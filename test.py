@@ -21,8 +21,8 @@ X, y = jnp.array(X), jnp.array(y)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 target_scaler = MinMaxScaler()
 feature_scaler = StandardScaler()
-y_train_scaled = target_scaler.fit_transform(y_train.reshape(-1, 1)).ravel 
-y_test_scaled = target_scaler.transform(y_test.reshape(-1, 1)).ravel
+y_train_scaled = target_scaler.fit_transform(y_train.reshape(-1, 1)).ravel()
+y_test_scaled = target_scaler.transform(y_test.reshape(-1, 1)).ravel()
 X_train_scaled = feature_scaler.fit_transform(X_train)
 X_test_scaled = feature_scaler.transform(X_test)
 
@@ -32,17 +32,39 @@ class Test(bnn.Module):
         super().__init__()
     def __call__(self, X, y=None):
         N, D = X.shape
-        X = bnn.JVPCirculant(
-            in_features=D,
-            first_row_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(len(shape)),
-            bias_prior_fn=lambda shape: dist.Normal(0, 1).expand(shape).to_event(1)
-            )(X)
-        X = jax.nn.tanh(X)
-        X = bnn.Linear(D, 1, name="out")(X)
-        mu = X.squeeze()
+        # Pre-normalize the input.
+        X_norm = bnn.LayerNorm(num_features=D)(X)
+        # First FFT-based circulant process.
+        X1 = bnn.JVPCirculantProcess(in_features=D)(X_norm)
+        # Apply a complex activation that modulates the spectral magnitude.
+        X2 = jax.nn.gelu(X1)
+        # Normalize the activated output.
+        X2_norm = bnn.LayerNorm(num_features=D, name="norm_2")(X2)
+        # Second FFT-based circulant process.
+        X3 = bnn.JVPCirculantProcess(in_features=D, name="second_kernel")(X2_norm)
+        # Use a learnable scaling parameter for the residual connection.
+        res_scale = numpyro.param("res_scale", jnp.array(1.0))
+        X_res = X3 + res_scale * X2
+        # Apply the complex activation again after the residual addition.
+        X_act = jax.nn.gelu(X_res)
+        # Final linear mapping.
+        X_out = bnn.Linear(in_features=D, out_features=1)(X_act)
+        mu = X_out.squeeze()
         sigma = numpyro.sample("sigma", dist.Exponential(1.0))
         with numpyro.plate("data", N):
-          numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
+            numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
+        return mu
+
+def complex_activation(z):
+    """
+    Applies a smooth nonlinearity in the spectral domain.
+    Computes the magnitude, applies GELU, and rescales the input while preserving phase.
+    """
+    mag = jnp.abs(z)
+    mag_act = jax.nn.gelu(mag)
+    scale = mag_act / (mag + 1e-6)
+    return z * scale
+
 
 def aggregate_diagnostics(diag_list):
     # Get all keys from the first diagnostic dictionary.
