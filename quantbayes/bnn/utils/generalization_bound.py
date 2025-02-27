@@ -1,8 +1,5 @@
-from jax.tree_util import tree_flatten
 import jax
 import jax.numpy as jnp
-import numpyro
-import numpyro.distributions as dist
 
 
 def extract_posterior_samples(

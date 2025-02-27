@@ -5,8 +5,8 @@ import equinox as eqx
 import jax.random as jr
 
 __all__ = [
-    "Circulant", 
-    "BlockCirculant",
+    "JVPCirculant", 
+    "JVPBlockCirculant",
     "JVPCirculantProcess",
     "JVPBlockCirculantProcess"
     ]

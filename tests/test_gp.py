@@ -10,7 +10,6 @@ from quantbayes.bnn.utils import (
     predict_gp,
     visualize_predictions,
     visualize_gp_kernel,
-    visualize_predictions,
     sample_gp_prior,
 )
 from quantbayes.stochax.utils import visualize_circulant_layer, analyze_pre_activations
