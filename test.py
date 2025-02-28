@@ -6,7 +6,7 @@ import numpy as np
 import equinox as eqx
 import numpyro
 import numpyro.distributions as dist
-from sklearn.model_selection import train_test_split 
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
@@ -30,6 +30,7 @@ X_test_scaled = feature_scaler.transform(X_test)
 class Test(bnn.Module):
     def __init__(self):
         super().__init__()
+
     def __call__(self, X, y=None):
         N, D = X.shape
         # Pre-normalize the input.
@@ -53,6 +54,7 @@ class Test(bnn.Module):
         sigma = numpyro.sample("sigma", dist.Exponential(1.0))
         with numpyro.plate("data", N):
             numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
+
 
 def complex_activation(z):
     """
@@ -85,6 +87,7 @@ def aggregate_diagnostics(diag_list):
             agg[key] = {"mean": None, "std": None}
     return agg
 
+
 # List of seeds for multiple runs
 seeds = [0, 1, 2, 3, 4]
 rmse_list = []
@@ -100,20 +103,20 @@ for seed in seeds:
     model.fit(X_train_scaled, y_train_scaled, k1)
     end_time = time.time()
     run_time = end_time - start_time
-    
+
     preds = model.predict(X_test_scaled, posterior="obs", rng_key=k2)
     # Compute mean prediction across chains/samples
     mean_preds = np.array(preds).mean(axis=0)
     mean_preds = target_scaler.inverse_transform(mean_preds.reshape(-1, 1)).reshape(-1)
     targets = target_scaler.inverse_transform(y_test_scaled.reshape(-1, 1)).reshape(-1)
     rmse = np.sqrt(mean_squared_error(np.array(targets), mean_preds))
-    
+
     diagnostics = evaluate_mcmc(model)
-    
+
     rmse_list.append(rmse)
     time_list.append(run_time)
     diagnostics_list.append(diagnostics)
-    
+
     print(f"Seed {seed}: RMSE: {rmse:.2f}, Time: {run_time:.2f} s")
     print("Diagnostics:", diagnostics)
 

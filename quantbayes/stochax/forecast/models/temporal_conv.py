@@ -160,7 +160,7 @@ class TCNForecast(eqx.Module):
         self.final_linear = eqx.nn.Linear(num_filters, 1, key=keys[1])
         self.in_channels = in_channels
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         """
         Args:
           x: Input tensor of shape [N, seq_len, D], where D == in_channels.
@@ -174,7 +174,7 @@ class TCNForecast(eqx.Module):
         # y: shape [N, num_filters, seq_len]. Select the last time step.
         last = y[:, :, -1]  # shape: [N, num_filters]
         # Use vmap to apply final_linear to each sample.
-        return jax.vmap(self.final_linear)(last)
+        return jax.vmap(self.final_linear)(last), state
 
 
 # -------------------------------------------------------------------

@@ -250,7 +250,7 @@ class WaveNetForecast(eqx.Module):
         )
         self.final_linear = eqx.nn.Linear(skip_channels, 1, key=keys[1])
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         """
         Args:
           x: Input tensor of shape [N, seq_len, D]
@@ -265,7 +265,7 @@ class WaveNetForecast(eqx.Module):
         # Extract the final time step along the temporal dimension.
         last = out[:, :, -1]  # shape [N, skip_channels]
         # Apply final linear layer to each sample.
-        return jax.vmap(self.final_linear)(last)
+        return jax.vmap(self.final_linear)(last), state
 
 
 # -------------------------------------------------------------------

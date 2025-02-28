@@ -9,10 +9,13 @@ from typing import Optional
 # Import your circulant layer.
 from quantbayes.stochax.layers import JVPCirculantProcess
 
+
 # -------------------------------------------------------------------
 # Drop Path (Stochastic Depth) Function
 # -------------------------------------------------------------------
-def drop_path(x: jnp.ndarray, drop_prob: float, key: PRNGKeyArray, training: bool) -> jnp.ndarray:
+def drop_path(
+    x: jnp.ndarray, drop_prob: float, key: PRNGKeyArray, training: bool
+) -> jnp.ndarray:
     if drop_prob == 0.0 or not training:
         return x
     keep_prob = 1.0 - drop_prob
@@ -21,6 +24,7 @@ def drop_path(x: jnp.ndarray, drop_prob: float, key: PRNGKeyArray, training: boo
     binary_tensor = jnp.floor(random_tensor + keep_prob)
     return x / keep_prob * binary_tensor
 
+
 # -------------------------------------------------------------------
 # Patch Embedding Module
 # -------------------------------------------------------------------
@@ -28,11 +32,17 @@ class PatchEmbedding(eqx.Module):
     linear: eqx.nn.Linear
     patch_size: int
 
-    def __init__(self, input_channels: int, output_shape: int, patch_size: int, key: PRNGKeyArray):
+    def __init__(
+        self, input_channels: int, output_shape: int, patch_size: int, key: PRNGKeyArray
+    ):
         self.patch_size = patch_size
-        self.linear = eqx.nn.Linear(self.patch_size**2 * input_channels, output_shape, key=key)
+        self.linear = eqx.nn.Linear(
+            self.patch_size**2 * input_channels, output_shape, key=key
+        )
 
-    def __call__(self, x: Float[Array, "channels height width"]) -> Float[Array, "num_patches embedding_dim"]:
+    def __call__(
+        self, x: Float[Array, "channels height width"]
+    ) -> Float[Array, "num_patches embedding_dim"]:
         x = einops.rearrange(
             x,
             "c (h ph) (w pw) -> (h w) (c ph pw)",
@@ -41,6 +51,7 @@ class PatchEmbedding(eqx.Module):
         )
         x = jax.vmap(self.linear)(x)
         return x
+
 
 # -------------------------------------------------------------------
 # Spectral Multihead Attention (adapted from your friend’s ideas)
@@ -56,10 +67,19 @@ class SpectralMultiheadAttention(eqx.Module):
 
     # Base spectral parameters.
     base_filter: jnp.ndarray  # shape: (num_heads, freq_bins, 1)
-    base_bias: jnp.ndarray    # shape: (num_heads, freq_bins, 1)
+    base_bias: jnp.ndarray  # shape: (num_heads, freq_bins, 1)
     adaptive_mlp: Optional[eqx.nn.MLP]
 
-    def __init__(self, embed_dim: int, seq_len: int, num_heads: int = 4, dropout_rate: float = 0.1, adaptive: bool = True, *, key: PRNGKeyArray):
+    def __init__(
+        self,
+        embed_dim: int,
+        seq_len: int,
+        num_heads: int = 4,
+        dropout_rate: float = 0.1,
+        adaptive: bool = True,
+        *,
+        key: PRNGKeyArray,
+    ):
         self.embed_dim = embed_dim
         self.seq_len = seq_len
         self.num_heads = num_heads
@@ -93,7 +113,9 @@ class SpectralMultiheadAttention(eqx.Module):
         scale = mag_act / (mag + 1e-6)
         return z * scale
 
-    def __call__(self, x: jnp.ndarray, training: bool, key: PRNGKeyArray) -> jnp.ndarray:
+    def __call__(
+        self, x: jnp.ndarray, training: bool, key: PRNGKeyArray
+    ) -> jnp.ndarray:
         # x: (seq_len, embed_dim) or (B, seq_len, embed_dim)
         single_example = False
         if x.ndim == 2:
@@ -105,21 +127,25 @@ class SpectralMultiheadAttention(eqx.Module):
         x_norm = jax.vmap(jax.vmap(self.pre_norm))(x)
         # Reshape to separate heads.
         x_heads = x_norm.reshape(B, N, self.num_heads, self.head_dim)
-        x_heads = jnp.transpose(x_heads, (0, 2, 1, 3))  # (B, num_heads, seq_len, head_dim)
+        x_heads = jnp.transpose(
+            x_heads, (0, 2, 1, 3)
+        )  # (B, num_heads, seq_len, head_dim)
         F_fft = jnp.fft.rfft(x_heads, axis=2)
 
         if self.adaptive and (self.adaptive_mlp is not None):
             # Global context from all tokens.
             context = x_norm.mean(axis=1)  # shape: (B, embed_dim)
             # Vmap the MLP so that it processes each sample individually.
-            adapt_params = jax.vmap(self.adaptive_mlp)(context)  # shape: (B, num_heads*freq_bins*2)
+            adapt_params = jax.vmap(self.adaptive_mlp)(
+                context
+            )  # shape: (B, num_heads*freq_bins*2)
             freq_bins = F_fft.shape[2]
             adapt_params = adapt_params.reshape(B, self.num_heads, freq_bins, 2)
             adaptive_scale = adapt_params[..., 0:1]
-            adaptive_bias  = adapt_params[..., 1:2]
+            adaptive_bias = adapt_params[..., 1:2]
         else:
             adaptive_scale = jnp.zeros((B, self.num_heads, F_fft.shape[2], 1))
-            adaptive_bias  = jnp.zeros((B, self.num_heads, F_fft.shape[2], 1))
+            adaptive_bias = jnp.zeros((B, self.num_heads, F_fft.shape[2], 1))
 
         effective_filter = self.base_filter * (1 + adaptive_scale)
         effective_bias = self.base_bias + adaptive_bias
@@ -133,6 +159,7 @@ class SpectralMultiheadAttention(eqx.Module):
         if single_example:
             return x_filtered[0]
         return x_filtered
+
 
 # -------------------------------------------------------------------
 # Spectral Attention Block (Fusion of spectral attention and spectral circulant MLP)
@@ -153,7 +180,17 @@ class SpectralAttentionBlock(eqx.Module):
     # Drop path rate for stochastic depth.
     drop_path_rate: float = eqx.static_field()
 
-    def __init__(self, embed_dim: int, seq_len: int, num_heads: int, dropout_rate: float, drop_path_rate: float, *, key: PRNGKeyArray, use_spectral: bool = True):
+    def __init__(
+        self,
+        embed_dim: int,
+        seq_len: int,
+        num_heads: int,
+        dropout_rate: float,
+        drop_path_rate: float,
+        *,
+        key: PRNGKeyArray,
+        use_spectral: bool = True,
+    ):
         key1, key2, key3, key4, key5, key6 = jr.split(key, 6)
         self.layer_norm1 = eqx.nn.LayerNorm(embed_dim)
         self.spectral_attn = SpectralMultiheadAttention(
@@ -171,7 +208,9 @@ class SpectralAttentionBlock(eqx.Module):
         self.dropout_mlp = eqx.nn.Dropout(dropout_rate)
         self.drop_path_rate = drop_path_rate
 
-    def __call__(self, x: jnp.ndarray, training: bool, key: PRNGKeyArray) -> jnp.ndarray:
+    def __call__(
+        self, x: jnp.ndarray, training: bool, key: PRNGKeyArray
+    ) -> jnp.ndarray:
         key_attn, key_dp1, key_mlp, key_dp2 = jr.split(key, 4)
         # Apply layer norm over each token.
         norm1_out = jax.vmap(self.layer_norm1)(x)
@@ -189,6 +228,7 @@ class SpectralAttentionBlock(eqx.Module):
         mlp_out = drop_path(mlp_out, self.drop_path_rate, key_dp2, training)
         x = x + mlp_out
         return x
+
 
 # -------------------------------------------------------------------
 # Vision Transformer with Fused Spectral Blocks
@@ -233,12 +273,21 @@ class SpectralVisionTransformer(eqx.Module):
             for i in range(num_layers)
         ]
         self.dropout = eqx.nn.Dropout(dropout_rate)
-        self.mlp_head = eqx.nn.Sequential([
-            eqx.nn.LayerNorm(embedding_dim),
-            eqx.nn.Linear(embedding_dim, num_classes, key=jr.fold_in(key4, 999)),
-        ])
+        self.mlp_head = eqx.nn.Sequential(
+            [
+                eqx.nn.LayerNorm(embedding_dim),
+                eqx.nn.Linear(embedding_dim, num_classes, key=jr.fold_in(key4, 999)),
+            ]
+        )
 
-    def __call__(self, x: Float[Array, "channels height width"], training: bool, key: PRNGKeyArray) -> Float[Array, "num_classes"]:
+    def __call__(
+        self,
+        x: Float[Array, "channels height width"],
+        training: bool,
+        state: eqx.nn.State,
+        *,
+        key: PRNGKeyArray,
+    ) -> Float[Array, "num_classes"]:
         x = self.patch_embedding(x)
         x = jnp.concatenate((self.cls_token, x), axis=0)
         x += self.positional_embedding[: x.shape[0]]
@@ -249,7 +298,8 @@ class SpectralVisionTransformer(eqx.Module):
             x = block(x, training, subkey)
         x = x[0]
         x = self.mlp_head(x)
-        return x
+        return x, state
+
 
 # -------------------------------------------------------------------
 # Test Function
@@ -288,8 +338,11 @@ def test_vision_transformer_output_shape():
 
     x = jr.normal(input_key, (channels, img_height, img_width))
     logits = vit(x, training=False, key=run_key)
-    assert logits.shape == (num_classes,), f"Expected output shape ({num_classes},), got {logits.shape}"
+    assert logits.shape == (
+        num_classes,
+    ), f"Expected output shape ({num_classes},), got {logits.shape}"
     print("Test passed!")
+
 
 if __name__ == "__main__":
     test_vision_transformer_output_shape()

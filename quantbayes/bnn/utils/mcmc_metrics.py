@@ -6,10 +6,11 @@ import warnings
 
 from quantbayes import bnn
 
+
 def count_params_mcmc(samples):
     """
     Count the total number of parameters from an MCMC object.
-    
+
     This function assumes that mcmc.get_samples() returns a dictionary
     where each value is an array with shape (num_samples, ...), and counts
     the total number of parameters per sample.
@@ -22,28 +23,31 @@ def count_params_mcmc(samples):
         total_params += param_count
     return total_params
 
+
 def evaluate_mcmc(model: bnn.Module) -> dict:
     """
     Evaluate an MCMC model by computing common diagnostics and return a summary dictionary.
-    
+
     The returned dictionary includes WAIC, LOO, average Rhat, average ESS, and total parameter count.
     Values are formatted to two decimal places where appropriate.
-    
+
     :param model: A model instance (subclass of Module) that has run inference.
     :raises ValueError: If the model does not have inference results.
     :return: A dictionary containing the diagnostics.
     """
     if not hasattr(model, "inference") or model.inference is None:
-        raise ValueError("The model does not have inference results. Please run inference first!")
-    
+        raise ValueError(
+            "The model does not have inference results. Please run inference first!"
+        )
+
     idata = az.from_numpyro(model.inference)
-    
+
     try:
         waic_result = az.waic(idata)
     except Exception as e:
         warnings.warn("WAIC computation failed: " + str(e))
         waic_result = None
-        
+
     try:
         loo_result = az.loo(idata)
     except Exception as e:
@@ -89,7 +93,9 @@ def evaluate_mcmc(model: bnn.Module) -> dict:
     total_params = count_params_mcmc(samples)
 
     summary = {
-        "elpd_waic": f"{waic_result.elpd_waic:.2f}" if waic_result is not None else "NaN",
+        "elpd_waic": (
+            f"{waic_result.elpd_waic:.2f}" if waic_result is not None else "NaN"
+        ),
         "p_waic": f"{waic_result.p_waic:.2f}" if waic_result is not None else "NaN",
         "waic_se": f"{waic_se:.2f}",
         "elpd_loo": f"{loo_result.elpd_loo:.2f}" if loo_result is not None else "NaN",

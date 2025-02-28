@@ -91,7 +91,7 @@ class MambaStateSpaceForecast(eqx.Module):
         self.seq_len = seq_len
         self.d = d
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         """
         Args:
           x: Input tensor of shape [N, seq_len, D]
@@ -105,7 +105,10 @@ class MambaStateSpaceForecast(eqx.Module):
             batch_keys = jax.random.split(key, x.shape[0])
         else:
             batch_keys = [None] * x.shape[0]
-        return jax.vmap(lambda x_sample, k: self.model(x_sample, key=k))(x, batch_keys)
+        return (
+            jax.vmap(lambda x_sample, k: self.model(x_sample, key=k))(x, batch_keys),
+            state,
+        )
 
 
 # --------------------------------------------------------------

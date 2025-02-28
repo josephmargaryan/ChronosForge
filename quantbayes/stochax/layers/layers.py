@@ -474,6 +474,7 @@ class SpectralDenseBlock(eqx.Module):
 
     This layer is defined for a single example with shape (in_features,).
     """
+
     in_features: int
     out_features: int
     hidden_dim: int
@@ -481,7 +482,9 @@ class SpectralDenseBlock(eqx.Module):
     w_imag: jnp.ndarray  # shape: (in_features,)
     linear1: eqx.nn.Linear  # maps (in_features,) -> (hidden_dim,)
     linear2: eqx.nn.Linear  # maps (hidden_dim,) -> (out_features,)
-    proj: Optional[eqx.nn.Linear]  # optional projection from in_features to out_features
+    proj: Optional[
+        eqx.nn.Linear
+    ]  # optional projection from in_features to out_features
 
     def __init__(self, in_features: int, out_features: int, hidden_dim: int, *, key):
         self.in_features = in_features
@@ -494,7 +497,11 @@ class SpectralDenseBlock(eqx.Module):
         self.linear1 = eqx.nn.Linear(in_features, hidden_dim, key=k3)
         self.linear2 = eqx.nn.Linear(hidden_dim, out_features, key=k4)
         # If in_features != out_features, create a projection for the residual path.
-        self.proj = eqx.nn.Linear(in_features, out_features, key=k5) if in_features != out_features else None
+        self.proj = (
+            eqx.nn.Linear(in_features, out_features, key=k5)
+            if in_features != out_features
+            else None
+        )
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         # x is expected to be of shape (in_features,)

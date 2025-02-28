@@ -436,27 +436,32 @@ def _get_fft_samples(model, X):
 def _get_block_fft_samples(model, X):
 
     posterior_samples = model.get_samples
-    param_dict = {key: value[0] for key, value in posterior_samples.items() if key != "logits"}
-    fft_full_blocks = get_block_fft_full_for_given_params(model, X, param_dict, rng_key=jr.PRNGKey(123))
+    param_dict = {
+        key: value[0] for key, value in posterior_samples.items() if key != "logits"
+    }
+    fft_full_blocks = get_block_fft_full_for_given_params(
+        model, X, param_dict, rng_key=jr.PRNGKey(123)
+    )
     fft_list_blocks = []
     n_samples = 50
     for i in range(n_samples):
-        sample_param_dict = {key: value[i] for key, value in posterior_samples.items() if key != "logits"}
-        fft_sample_block = get_block_fft_full_for_given_params(model, X, sample_param_dict, rng_key=jr.PRNGKey(i))
+        sample_param_dict = {
+            key: value[i] for key, value in posterior_samples.items() if key != "logits"
+        }
+        fft_sample_block = get_block_fft_full_for_given_params(
+            model, X, sample_param_dict, rng_key=jr.PRNGKey(i)
+        )
         fft_list_blocks.append(fft_sample_block)
 
-        
     fft_samples_blocks = np.stack(fft_list_blocks, axis=0)
     return fft_samples_blocks
-
-    
 
 
 def visualize_circulant_layer(model, X, show=True):
     """
     Visualizes the FFT spectrum (magnitude and phase) and the time-domain circulant kernel.
     If fft_samples has multiple samples, uncertainty (e.g., 95% CI) is shown.
-    
+
     """
     fft_samples = _get_fft_samples(model, X)
     # Compute statistics (mean, lower, upper bounds) for FFT spectrum.

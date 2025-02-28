@@ -183,7 +183,7 @@ class TemporalFusionTransformerForecast(eqx.Module):
             input_size, hidden_size, num_heads, key=key
         )
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         """
         Args:
           x: Input tensor of shape [N, seq_len, input_size]
@@ -200,7 +200,7 @@ class TemporalFusionTransformerForecast(eqx.Module):
             batch_keys = jax.random.split(key, x.shape[0])
         else:
             batch_keys = [None] * x.shape[0]
-        return jax.vmap(process_sample)(x, batch_keys)
+        return jax.vmap(process_sample)(x, batch_keys), state
 
 
 # -------------------------------------------------------------------

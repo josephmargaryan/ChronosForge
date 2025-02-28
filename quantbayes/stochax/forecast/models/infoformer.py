@@ -241,7 +241,7 @@ class InfoFormerForecast(eqx.Module):
             key=key,
         )
 
-    def __call__(self, x, *, key=None):
+    def __call__(self, x, state: eqx.nn.State, *, key=None):
         """
         Args:
           x: Input tensor of shape [N, seq_len, embed_dim]
@@ -257,7 +257,7 @@ class InfoFormerForecast(eqx.Module):
             batch_keys = jax.random.split(key, x.shape[0])
         else:
             batch_keys = [None] * x.shape[0]
-        return jax.vmap(process_sample)(x, batch_keys)
+        return jax.vmap(process_sample)(x, batch_keys), state
 
 
 # --- Example usage ---

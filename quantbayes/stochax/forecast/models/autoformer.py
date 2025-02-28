@@ -131,7 +131,7 @@ class Autoformer(eqx.Module):
         ]
         self.final_linear = eqx.nn.Linear(embed_dim, 1, key=keys[-1])
 
-    def __call__(self, x, *, key=None):
+    def __call__(self, x, state: eqx.nn.State, *, key=None):
         """
         Args:
           x: Input array of shape [N, seq_len, D]
@@ -157,7 +157,7 @@ class Autoformer(eqx.Module):
         else:
             batch_keys = [None] * x.shape[0]
         out = jax.vmap(process_sample)(x, batch_keys)
-        return out
+        return out, state
 
 
 # === Example usage ===

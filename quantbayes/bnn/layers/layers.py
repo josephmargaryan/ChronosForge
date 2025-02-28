@@ -31,7 +31,7 @@ __all__ = [
     "LSTM",
     "GaussianProcessLayer",
     "VariationalLayer",
-    "MixtureOfTwoLayers"
+    "MixtureOfTwoLayers",
 ]
 
 
@@ -622,7 +622,8 @@ class BlockCirculantProcess:
         if self._last_block_fft is None:
             raise ValueError("No Fourier coefficients yet. Call the layer first.")
         return self._last_block_fft
-    
+
+
 class MixtureOfTwoLayers:
     """
     Combine outputs from two sub-layers via gating:
@@ -656,15 +657,21 @@ class MixtureOfTwoLayers:
             return gate * outA + (1.0 - gate) * outB
         elif self.gating_mode == "beta":
             # sample a random gate from Beta
-            alpha0 = numpyro.param(f"{self.name}_alpha0", 2.0, constraint=dist.constraints.positive)
-            beta0  = numpyro.param(f"{self.name}_beta0", 2.0,  constraint=dist.constraints.positive)
+            alpha0 = numpyro.param(
+                f"{self.name}_alpha0", 2.0, constraint=dist.constraints.positive
+            )
+            beta0 = numpyro.param(
+                f"{self.name}_beta0", 2.0, constraint=dist.constraints.positive
+            )
             gate_sample = numpyro.sample(f"{self.name}_gate", dist.Beta(alpha0, beta0))
             return gate_sample * outA + (1.0 - gate_sample) * outB
         elif self.gating_mode == "mlp":
             # data-dependent gate (per example). We'll do a single-layer net from X to a scalar gate:
             d_in = X.shape[-1]
-            w = numpyro.sample(f"{self.name}_gate_w", dist.Normal(0,1).expand([d_in, 1]))
-            b = numpyro.sample(f"{self.name}_gate_b", dist.Normal(0,1).expand([1]))
+            w = numpyro.sample(
+                f"{self.name}_gate_w", dist.Normal(0, 1).expand([d_in, 1])
+            )
+            b = numpyro.sample(f"{self.name}_gate_b", dist.Normal(0, 1).expand([1]))
             # shape => (batch_size, 1)
             logit = jnp.dot(X, w) + b
             gate = jax.nn.sigmoid(logit)  # shape (batch_size, 1)
@@ -1088,12 +1095,13 @@ class SpectralDenseBlock:
       4) A pointwise MLP that maps from in_features to out_features,
       5) And adds a residual connection (with projection if needed).
     """
+
     def __init__(
         self,
         in_features: int,
         hidden_dim: int = 32,
         out_features: int = None,
-        name: str = "spectral_dense_block"
+        name: str = "spectral_dense_block",
     ):
         self.in_features = in_features
         self.hidden_dim = hidden_dim
@@ -1109,61 +1117,56 @@ class SpectralDenseBlock:
 
         # 1) FFT of the input.
         X_fft = jnp.fft.fft(X, axis=-1)
-        
+
         # 2) Sample and construct a trainable Fourier mask.
         w_real = numpyro.sample(
-            f"{self.name}_fft_w_real", 
-            dist.Normal(0, 1).expand([d_in]).to_event(1)
+            f"{self.name}_fft_w_real", dist.Normal(0, 1).expand([d_in]).to_event(1)
         )
         w_imag = numpyro.sample(
-            f"{self.name}_fft_w_imag", 
-            dist.Normal(0, 1).expand([d_in]).to_event(1)
+            f"{self.name}_fft_w_imag", dist.Normal(0, 1).expand([d_in]).to_event(1)
         )
         mask_complex = w_real + 1j * w_imag
         out_fft = X_fft * mask_complex[None, :]
-        
+
         # 3) Inverse FFT to go back to the time domain.
         x_time = jnp.fft.ifft(out_fft, axis=-1).real
-        
+
         # 4) Apply a pointwise MLP.
         # First linear transformation: in_features -> hidden_dim.
         w1 = numpyro.sample(
             f"{self.name}_w1",
-            dist.Normal(0, 1).expand([d_in, self.hidden_dim]).to_event(2)
+            dist.Normal(0, 1).expand([d_in, self.hidden_dim]).to_event(2),
         )
         b1 = numpyro.sample(
-            f"{self.name}_b1", 
-            dist.Normal(0, 1).expand([self.hidden_dim]).to_event(1)
+            f"{self.name}_b1", dist.Normal(0, 1).expand([self.hidden_dim]).to_event(1)
         )
         h = jax.nn.relu(jnp.dot(x_time, w1) + b1)
         # Second linear transformation: hidden_dim -> out_features.
         w2 = numpyro.sample(
             f"{self.name}_w2",
-            dist.Normal(0, 1).expand([self.hidden_dim, self.out_features]).to_event(2)
+            dist.Normal(0, 1).expand([self.hidden_dim, self.out_features]).to_event(2),
         )
         b2 = numpyro.sample(
-            f"{self.name}_b2", 
-            dist.Normal(0, 1).expand([self.out_features]).to_event(1)
+            f"{self.name}_b2", dist.Normal(0, 1).expand([self.out_features]).to_event(1)
         )
         x_dense = jnp.dot(h, w2) + b2
-        
+
         # 5) Residual connection.
         # If the dimensions differ, project x_time to match out_features.
         if d_in != self.out_features:
             w_proj = numpyro.sample(
                 f"{self.name}_w_proj",
-                dist.Normal(0, 1).expand([d_in, self.out_features]).to_event(2)
+                dist.Normal(0, 1).expand([d_in, self.out_features]).to_event(2),
             )
             b_proj = numpyro.sample(
                 f"{self.name}_b_proj",
-                dist.Normal(0, 1).expand([self.out_features]).to_event(1)
+                dist.Normal(0, 1).expand([self.out_features]).to_event(1),
             )
             shortcut = jnp.dot(x_time, w_proj) + b_proj
         else:
             shortcut = x_time
 
         return shortcut + x_dense
-
 
 
 class ParticleLinear:

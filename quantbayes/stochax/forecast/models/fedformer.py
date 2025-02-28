@@ -212,7 +212,7 @@ class FedformerForecast(eqx.Module):
             embed_dim, num_heads, mlp_ratio, dropout_p, kernel_size, key=key
         )
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         """
         Args:
           x: Input array of shape [N, seq_len, embed_dim].
@@ -228,7 +228,7 @@ class FedformerForecast(eqx.Module):
             batch_keys = jax.random.split(key, x.shape[0])
         else:
             batch_keys = [None] * x.shape[0]
-        return jax.vmap(process_sample)(x, batch_keys)
+        return jax.vmap(process_sample)(x, batch_keys), state
 
 
 # --- Example usage ---

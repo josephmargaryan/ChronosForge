@@ -141,7 +141,7 @@ class NBeatsForecast(eqx.Module):
         self.seq_len = seq_len
         self.d = d
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         """
         Args:
           x: Input tensor of shape [N, seq_len, D]
@@ -153,7 +153,7 @@ class NBeatsForecast(eqx.Module):
         x_flat = x.reshape(batch_size, self.seq_len * self.d)
         # Apply the model to each sample via vmap.
         forecasts = jax.vmap(self.model)(x_flat)  # shape [N, 1]
-        return forecasts
+        return forecasts, state
 
 
 # -------------------------------------------------------

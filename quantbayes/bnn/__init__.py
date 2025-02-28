@@ -25,10 +25,15 @@ from .layers import (
     GaussianProcessLayer,
     VariationalLayer,
     SpectralDenseBlock,
-    MixtureOfTwoLayers
+    MixtureOfTwoLayers,
 )
 from .layers.base import Module
-from .layers.custom_jvp import JVPBlockCirculant, JVPCirculant, JVPBlockCirculantProcess, JVPCirculantProcess
+from .layers.custom_jvp import (
+    JVPBlockCirculant,
+    JVPCirculant,
+    JVPBlockCirculantProcess,
+    JVPCirculantProcess,
+)
 
 __all__ = [
     "Module",
@@ -60,7 +65,7 @@ __all__ = [
     "SpectralDenseBlock",
     "JVPBlockCirculant",
     "JVPCirculant",
-    "JVPBlockCirculantProcess", 
+    "JVPBlockCirculantProcess",
     "JVPCirculantProcess",
-    "MixtureOfTwoLayers"
+    "MixtureOfTwoLayers",
 ]

@@ -55,7 +55,7 @@ class LSTMBaseline(eqx.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         # x: shape (seq_len, input_size)
         init_state = (jnp.zeros((self.hidden_size,)), jnp.zeros((self.hidden_size,)))
 
@@ -67,7 +67,7 @@ class LSTMBaseline(eqx.Module):
 
         _, h_seq = jax.lax.scan(step, init_state, x)
         final_hidden = h_seq[-1]
-        return self.final_linear(final_hidden)  # shape (1,)
+        return self.final_linear(final_hidden), state  # shape (1,)
 
 
 # -------------------------------------------------------------------
@@ -86,14 +86,17 @@ class GRUBaselineForecast(eqx.Module):
         self.seq_len = seq_len
         self.d = d
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         # x: shape [N, seq_len, d]
         batch_size = x.shape[0]
         if key is not None:
             batch_keys = jax.random.split(key, batch_size)
         else:
             batch_keys = [None] * batch_size
-        return jax.vmap(lambda sample, k: self.model(sample, key=k))(x, batch_keys)
+        return (
+            jax.vmap(lambda sample, k: self.model(sample, key=k))(x, batch_keys),
+            state,
+        )
 
 
 class LSTMBaselineForecast(eqx.Module):
@@ -106,14 +109,17 @@ class LSTMBaselineForecast(eqx.Module):
         self.seq_len = seq_len
         self.d = d
 
-    def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
         # x: shape [N, seq_len, d]
         batch_size = x.shape[0]
         if key is not None:
             batch_keys = jax.random.split(key, batch_size)
         else:
             batch_keys = [None] * batch_size
-        return jax.vmap(lambda sample, k: self.model(sample, key=k))(x, batch_keys)
+        return (
+            jax.vmap(lambda sample, k: self.model(sample, key=k))(x, batch_keys),
+            state,
+        )
 
 
 # -------------------------------------------------------------------

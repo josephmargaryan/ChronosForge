@@ -22,5 +22,5 @@ __all__ = [
     "TemporalFusionTransformerForecast",
     "TimeGPTForecast",
     "WaveNetForecast",
-    "SpectralTemporalFusionTransformer"
+    "SpectralTemporalFusionTransformer",
 ]

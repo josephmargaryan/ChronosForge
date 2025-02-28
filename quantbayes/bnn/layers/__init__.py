@@ -27,10 +27,15 @@ from .layers import (
     VariationalLayer,
     FourierNeuralOperator1D,
     SpectralDenseBlock,
-    MixtureOfTwoLayers
+    MixtureOfTwoLayers,
 )
 
-from .custom_jvp import JVPBlockCirculant, JVPCirculant, JVPCirculantProcess, JVPBlockCirculantProcess
+from .custom_jvp import (
+    JVPBlockCirculant,
+    JVPCirculant,
+    JVPCirculantProcess,
+    JVPBlockCirculantProcess,
+)
 
 __all__ = [
     "Module",
@@ -62,7 +67,7 @@ __all__ = [
     "SpectralDenseBlock",
     "JVPBlockCirculant",
     "JVPCirculant",
-    "JVPCirculantProcess", 
+    "JVPCirculantProcess",
     "JVPBlockCirculantProcess",
-    "MixtureOfTwoLayers"
+    "MixtureOfTwoLayers",
 ]
