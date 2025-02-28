@@ -68,12 +68,12 @@ class SpectralUNet(eqx.Module):
         self.decoder = SpectralConvBlock(64, 64, spatial_shape, key=k2)
         self.final_conv = eqx.nn.Conv2d(64, out_channels, kernel_size=1, key=k3)
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state=None, *, key=None) -> jnp.ndarray:
         # x: (C, H, W)
         enc = self.encoder(x)
         dec = self.decoder(enc)
         out = self.final_conv(dec)
-        return out
+        return out, state
 
 # --- Example usage ---
 if __name__ == "__main__":
@@ -82,5 +82,5 @@ if __name__ == "__main__":
     x = jr.normal(key, (3, 128, 128))
     model_key, run_key = jr.split(key)
     model = SpectralUNet(in_channels=3, out_channels=1, spatial_shape=(128,128), key=model_key)
-    y = model(x)
+    y, state = model(x)
     print("Spectral UNet output shape:", y.shape)
