@@ -53,7 +53,6 @@ class Test(bnn.Module):
         sigma = numpyro.sample("sigma", dist.Exponential(1.0))
         with numpyro.plate("data", N):
             numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
-        return mu
 
 def complex_activation(z):
     """
