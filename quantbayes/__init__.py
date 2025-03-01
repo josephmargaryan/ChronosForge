@@ -13,6 +13,7 @@ from . import fake_data
 from . import preprocessing
 from . import ensemble
 from .in_batches import in_batches
+from . import hyperparameter_tune
 
 __all__ = [
     "bnn",
@@ -30,4 +31,5 @@ __all__ = [
     "preprocessing",
     "ensemble",
     "in_batches",
+    "hyperparameter_tune"
 ]
