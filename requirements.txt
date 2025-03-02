@@ -11,3 +11,7 @@ diffrax
 optax
 einops
 arviz
+optuna
+xgboost
+catboost
+lightgbm

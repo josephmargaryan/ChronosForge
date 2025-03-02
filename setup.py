@@ -21,6 +21,10 @@ setup(
         "funsor",
         "einops",
         "arviz",
+        "optuna",
+        "xgboost",
+        "lightgbm",
+        "catboost"
     ],
     python_requires=">=3.7",
 )
