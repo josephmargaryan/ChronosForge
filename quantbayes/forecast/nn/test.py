@@ -29,7 +29,7 @@ train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=32)
 
 # Instantiate model
-model = NBeats(10)
+model = Informer(input_dim=1)
 trainer = TimeSeriesTrainer(model)
 trainer.compile(
     optimizer=torch.optim.Adam(model.parameters(), lr=1e-3),

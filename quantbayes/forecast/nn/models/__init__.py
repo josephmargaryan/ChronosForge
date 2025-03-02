@@ -3,7 +3,7 @@
 from .autoformer import Autoformer
 from .fedformer import Fedformer
 from .infoformer import Informer
-from .lstm import LSTM
+from .lstm import LSTMModel
 from .mamba_stm import MambaStateSpace
 from .n_beats import NBeats
 from .n_beats2 import NBeats2
@@ -18,7 +18,7 @@ __all__ = [
     "Autoformer",
     "Fedformer",
     "Informer",
-    "LSTM",
+    "LSTMModel",
     "MambaStateSpace",
     "NBeats",
     "NBeats2",
