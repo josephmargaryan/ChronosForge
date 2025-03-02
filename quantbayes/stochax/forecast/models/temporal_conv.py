@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 import jax.nn as jnn
 import equinox as eqx
-from functools import partial
 
 
 # -------------------------------------------------------------------
@@ -153,52 +152,59 @@ class TCNForecast(eqx.Module):
         *,
         key
     ):
-        keys = jax.random.split(key, 2)
+        keys = jr.split(key, 2)
         self.tcn = TCN(
             in_channels, num_filters, num_levels, kernel_size, dropout_p, key=keys[0]
         )
         self.final_linear = eqx.nn.Linear(num_filters, 1, key=keys[1])
         self.in_channels = in_channels
 
-    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> tuple[jnp.ndarray, any]:
         """
         Args:
-          x: Input tensor of shape [N, seq_len, D], where D == in_channels.
+          x: A single sample of shape [seq_len, D], where D == in_channels.
           key: Optional PRNG key.
         Returns:
-          Predictions of shape [N, 1] (using the last time step's features).
+          A prediction of shape [1] and the state.
         """
-        # Rearrange to channels-first: from [N, seq_len, D] to [N, D, seq_len]
+        # Add a batch dimension: [1, seq_len, D]
+        x = x[None, ...]
+        # Rearrange from [1, seq_len, D] to [1, D, seq_len] for Conv1d.
         x = jnp.transpose(x, (0, 2, 1))
-        y = self.tcn(x, key=key)
-        # y: shape [N, num_filters, seq_len]. Select the last time step.
-        last = y[:, :, -1]  # shape: [N, num_filters]
-        # Use vmap to apply final_linear to each sample.
-        return jax.vmap(self.final_linear)(last), state
+        y = self.tcn(x, key=key)  # y: shape [1, num_filters, seq_len]
+        # Select the last time step along the temporal dimension.
+        last = y[:, :, -1]  # shape: [1, num_filters]
+        # Remove the batch dimension by taking the first (and only) sample.
+        pred = self.final_linear(last[0])  # shape: [1]
+        return pred, state
 
 
 # -------------------------------------------------------------------
 # Example usage
 # -------------------------------------------------------------------
 if __name__ == "__main__":
-    N, seq_len, D = 8, 20, 32
-    key = jax.random.PRNGKey(42)
-    x = jax.random.normal(key, (N, seq_len, D))
+    import jax.random as jr
+    from quantbayes.fake_data import create_synthetic_time_series
+    from quantbayes.stochax.forecast import ForecastingModel
 
-    num_filters = 64  # Number of filters per block.
-    num_levels = 4  # Number of TCN blocks.
-    kernel_size = 3  # Kernel size for causal convolutions.
-    dropout_p = 0.1  # Dropout probability.
+    # Create synthetic data.
+    X_train, X_val, y_train, y_val = create_synthetic_time_series()
+    y_train = y_train.reshape(y_train.shape[0], -1)
+    y_val = y_val.reshape(y_val.shape[0], -1)
+    print(f"X train shape: {X_train.shape}")
+    print(f"y train shape: {y_train.shape}")
 
-    model_key, run_key = jax.random.split(key)
-    model = TCNForecast(
-        in_channels=D,
-        num_filters=num_filters,
-        num_levels=num_levels,
-        kernel_size=kernel_size,
-        dropout_p=dropout_p,
-        key=model_key,
+    key = jr.PRNGKey(0)
+    model, state = eqx.nn.make_with_state(TCNForecast)(
+        in_channels=1,
+        num_filters=64,
+        num_levels=4,
+        kernel_size=4,
+        dropout_p=0.1,
+        key=key
     )
-
-    preds = model(x, key=run_key)
-    print("Predictions shape:", preds.shape)  # Expected: (8, 1)
+    trainer = ForecastingModel(lr=1e-4)
+    trainer.fit(model, state, X_train, y_train, X_val, y_val, num_epochs=500, patience=100)
+    preds = trainer.predict(model, state, X_val, key=jr.PRNGKey(123))
+    print(f"preds shape {preds.shape}")
+    trainer.visualize(y_val, preds, title="Forecast vs. Ground Truth")

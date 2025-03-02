@@ -160,6 +160,15 @@ class ForecastingModel:
             if patience_counter >= patience:
                 print("Early stopping triggered.")
                 break
+            
+        plt.figure(figsize=(8, 6))
+        plt.plot(self.train_losses, label="Training Loss")
+        plt.plot(self.val_losses, label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training and Validation Loss")
+        plt.legend()
+        plt.show()
 
         return model, state
 
@@ -262,15 +271,6 @@ if __name__ == "__main__":
     preds = forecasting_model.predict(trained_model, state, X_test)
     # Visualize
     forecasting_model.visualize(Y_test, preds, title="Forecast Demo")
-
-    plt.figure(figsize=(8, 6))
-    plt.plot(forecasting_model.train_losses, label="Training Loss")
-    plt.plot(forecasting_model.val_losses, label="Validation Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Training and Validation Loss")
-    plt.legend()
-    plt.show()
 
     preds = forecasting_model.predict(trained_model, state, X_test)
     print(f"MSE: {mean_squared_error(np.array(Y_test), np.array(preds))}")

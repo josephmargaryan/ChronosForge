@@ -85,8 +85,11 @@ class SpectralMultiheadAttention(eqx.Module):
         x_filtered = jnp.fft.irfft(F_fft_nl, n=self.seq_len, axis=2)
         x_filtered = jnp.transpose(x_filtered, (0, 2, 1, 3))
         x_filtered = x_filtered.reshape(B, self.seq_len, self.embed_dim)
-        key, subkey = jr.split(key)
-        x_filtered = self.dropout(x_filtered, inference=not training, key=subkey)
+        if key is not None:
+            key, subkey = jr.split(key)
+        else:
+            key = subkey = None
+        x_filtered = self.dropout(x_filtered, key=key)
         if single_example:
             return x_filtered[0]
         return x_filtered
@@ -141,20 +144,39 @@ class SpectralTemporalFusionTransformer(eqx.Module):
         concat = jnp.concatenate([last_hidden, attn_summary], axis=-1)
         gate = self.gating(concat)
         fused = gate * attn_summary + (1 - gate) * last_hidden
-        return self.final_linear(fused)
+        return self.final_linear(fused), state
 
 
-# --- Example usage ---
 if __name__ == "__main__":
-    # Example: each sequence has length 20 and input feature dimension 32.
-    seq_len, D = 20, 32
-    key = jr.PRNGKey(42)
-    # Create a dummy sequence of shape (seq_len, D)
-    x = jr.normal(key, (seq_len, D))
-    model_key, run_key = jr.split(key)
-    # Create the model with hidden_size = 32, num_heads = 4, and sequence length = 20.
-    model = SpectralTemporalFusionTransformer(
-        input_size=D, hidden_size=D, num_heads=4, seq_len=seq_len, key=model_key
+    import jax.random as jr
+    from quantbayes.fake_data import create_synthetic_time_series
+    from quantbayes.stochax.forecast import ForecastingModel
+
+    # Create synthetic data.
+    X_train, X_val, y_train, y_val = create_synthetic_time_series()
+    # Reshape raw input to [N, seq_len, D] with D == 1.
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+    X_val = X_val.reshape(X_val.shape[0], X_val.shape[1], 1)
+    y_train = y_train.reshape(y_train.shape[0], -1)
+    y_val = y_val.reshape(y_val.shape[0], -1)
+    print(f"X train shape: {X_train.shape}")
+    print(f"y train shape: {y_train.shape}")
+
+    key = jr.PRNGKey(0)
+    # Suggested hyperparameters for a univariate time series:
+    # seq_len = 10, d = 1, hidden_size = 12.
+    model, state = eqx.nn.make_with_state(SpectralTemporalFusionTransformer)(
+        input_size=1,
+        hidden_size=12,
+        num_heads=4,
+        seq_len=10,
+        key=key
     )
-    pred = model(x, key=run_key)
-    print("Spectral TFT prediction shape:", pred.shape)
+    trainer = ForecastingModel(lr=1e-3)
+    model, state = trainer.fit(
+        model, state, X_train, y_train, X_val, y_val,
+        num_epochs=500, patience=100, key=jr.PRNGKey(42)
+    )
+    preds = trainer.predict(model, state, X_val, key=jr.PRNGKey(123))
+    print(f"preds shape: {preds.shape}")
+    trainer.visualize(y_val, preds, title="Forecast vs. Ground Truth")

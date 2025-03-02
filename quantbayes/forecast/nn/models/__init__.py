@@ -11,6 +11,7 @@ from .temporal_convolutional_network import TCNForecaster
 from .temporal_fusion_transformer import TemporalFusionTransformer
 from .wave_net import WaveNet
 from .timegpt import TimeGTP
+from .totem import TOTEM
 
 # Expose these classes in the public API of `quantbayes.forecast.nn.models`
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "TemporalFusionTransformer",
     "WaveNet",
     "TimeGTP",
+    "TOTEM"
 ]

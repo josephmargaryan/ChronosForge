@@ -1,131 +1,132 @@
 import jax
 import jax.numpy as jnp
+import jax.random as jr
 import jax.nn as jnn
 import equinox as eqx
 
-
-# --------------------------------------------------------------
+# -------------------------------------------------------
 # MambaStateSpaceCell
 #
 # A simple state update cell:
-#    h[t+1] = activation( A @ h[t] + B @ x[t] + bias )
+#   h[t+1] = activation( A @ h[t] + B @ x[t] + bias )
 # where A and B are learnable matrices.
-# --------------------------------------------------------------
+# -------------------------------------------------------
 class MambaStateSpaceCell(eqx.Module):
-    A: jnp.ndarray  # shape (hidden_size, hidden_size)
-    B: jnp.ndarray  # shape (hidden_size, input_dim)
-    bias: jnp.ndarray  # shape (hidden_size,)
+    A: jnp.ndarray  # shape: (hidden_size, hidden_size)
+    B: jnp.ndarray  # shape: (hidden_size, input_dim)
+    bias: jnp.ndarray  # shape: (hidden_size,)
     activation: callable = eqx.field(static=True)
 
     def __init__(self, input_dim: int, hidden_size: int, *, key):
-        k1, k2, k3 = jax.random.split(key, 3)
-        self.A = jax.random.normal(k1, (hidden_size, hidden_size)) * 0.1
-        self.B = jax.random.normal(k2, (hidden_size, input_dim)) * 0.1
-        self.bias = jax.random.normal(k3, (hidden_size,)) * 0.1
-        self.activation = jnn.tanh  # You could also try relu, gelu, etc.
+        k1, k2, k3 = jr.split(key, 3)
+        self.A = jr.normal(k1, (hidden_size, hidden_size)) * 0.1
+        self.B = jr.normal(k2, (hidden_size, input_dim)) * 0.1
+        self.bias = jr.normal(k3, (hidden_size,)) * 0.1
+        self.activation = jnn.tanh
 
     def __call__(self, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
-        # x: shape (input_dim,), h: shape (hidden_size,)
-        # Compute the new state.
+        # Ensure x and h are flattened to 1D vectors.
+        x = jnp.reshape(x, (-1,))
+        h = jnp.reshape(h, (-1,))
         h_new = self.activation(jnp.dot(self.A, h) + jnp.dot(self.B, x) + self.bias)
         return h_new
 
-
-# --------------------------------------------------------------
+# -------------------------------------------------------
 # MambaStateSpaceModel
 #
-# This module applies the state-space recurrence over a sequence.
-# Given an input sequence x (shape: [seq_len, D]), it scans over time with the cell.
-# The final state is then mapped to a scalar forecast.
-# --------------------------------------------------------------
+# Applies the state-space recurrence over a sequence.
+# Given an input sequence x (shape: [seq_len, D]), it scans over time.
+# The final state is mapped to a scalar forecast.
+# -------------------------------------------------------
 class MambaStateSpaceModel(eqx.Module):
     cell: MambaStateSpaceCell
     out: eqx.nn.Linear
     hidden_size: int = eqx.field(static=True)
 
     def __init__(self, input_dim: int, hidden_size: int, *, key):
-        # Split keys for the cell and the output layer.
-        k1, k2 = jax.random.split(key)
+        k1, k2 = jr.split(key)
         self.cell = MambaStateSpaceCell(input_dim, hidden_size, key=k1)
-        # Map from final state (hidden_size) to scalar forecast.
         self.out = eqx.nn.Linear(hidden_size, 1, key=k2)
         self.hidden_size = hidden_size
 
     def __call__(self, x: jnp.ndarray, *, key=None) -> jnp.ndarray:
         """
         Args:
-          x: Input sequence of shape (seq_len, input_dim)
+            x: Input sequence of shape (seq_len, input_dim)
         Returns:
-          A scalar forecast (shape (1,)) computed from the final state.
+            Scalar forecast of shape (1,)
         """
         seq_len = x.shape[0]
-        # Initialize the state as zeros.
         h = jnp.zeros((self.hidden_size,))
-
-        # Define the recurrence.
         def step(h, x_t):
             h_new = self.cell(x_t, h)
             return h_new, h_new
-
-        # Use lax.scan to iterate over the sequence.
         _, hs = jax.lax.scan(step, h, x)
-        final_state = hs[-1]  # shape: (hidden_size,)
-        return self.out(final_state)  # shape: (1,)
+        final_state = hs[-1]
+        return self.out(final_state)
 
-
-# --------------------------------------------------------------
-# MambaStateSpaceForecast
+# -------------------------------------------------------
+# MambaStateSpaceForecast Wrapper
 #
-# This wrapper converts batched inputs to the form expected by the state space model.
-# It expects inputs of shape [N, seq_len, D] and applies the state space model
-# to each sample via jax.vmap, yielding outputs of shape [N, 1].
-# --------------------------------------------------------------
+# This wrapper makes the model compatible with the forecasting
+# training pipeline. It assumes that the input x is a single sample
+# of shape (seq_len, D) and passes through a dummy state.
+# The training wrapper will vmap over samples.
+# -------------------------------------------------------
 class MambaStateSpaceForecast(eqx.Module):
     model: MambaStateSpaceModel
     seq_len: int = eqx.field(static=True)
     d: int = eqx.field(static=True)
 
     def __init__(self, seq_len: int, d: int, hidden_size: int, *, key):
-        # The state-space model processes inputs of shape (seq_len, d).
         self.model = MambaStateSpaceModel(d, hidden_size, key=key)
         self.seq_len = seq_len
         self.d = d
 
-    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> tuple[jnp.ndarray, any]:
         """
         Args:
-          x: Input tensor of shape [N, seq_len, D]
-          key: Optional PRNG key.
+            x: A single sample of shape (seq_len, d)
+            state: Unused state (passed through for consistency)
+            key: Random key for any stochastic operations (unused here)
         Returns:
-          Forecasts of shape [N, 1] computed from the final state.
+            Tuple of (forecast, state) where forecast is of shape (1,)
         """
-        # We apply the state-space model to each sample in the batch.
-        if key is not None:
-            # Split the key into one per sample.
-            batch_keys = jax.random.split(key, x.shape[0])
-        else:
-            batch_keys = [None] * x.shape[0]
-        return (
-            jax.vmap(lambda x_sample, k: self.model(x_sample, key=k))(x, batch_keys),
-            state,
-        )
+        preds = self.model(x, key=key)
+        return preds, state
 
-
-# --------------------------------------------------------------
+# -------------------------------------------------------
 # Example usage
-# --------------------------------------------------------------
+# -------------------------------------------------------
 if __name__ == "__main__":
-    # For example: a batch of 8 sequences, each of length 20, with 32 features.
-    N, seq_len, D = 8, 20, 32
-    key = jax.random.PRNGKey(42)
-    x = jax.random.normal(key, (N, seq_len, D))
+    import jax.random as jr
+    from quantbayes.fake_data import create_synthetic_time_series
+    from quantbayes.stochax.forecast import ForecastingModel
 
-    # Define hyperparameters.
-    hidden_size = 64  # Size of the state.
+    # Create synthetic data.
+    X_train, X_val, y_train, y_val = create_synthetic_time_series()
+    # Reshape raw input to [N, seq_len, D] with D == 1.
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+    X_val = X_val.reshape(X_val.shape[0], X_val.shape[1], 1)
+    y_train = y_train.reshape(y_train.shape[0], -1)
+    y_val = y_val.reshape(y_val.shape[0], -1)
+    print(f"X train shape: {X_train.shape}")
+    print(f"y train shape: {y_train.shape}")
 
-    # Create the MambaStateSpaceForecast model.
-    model_key, run_key = jax.random.split(key)
-    model = MambaStateSpaceForecast(seq_len, D, hidden_size, key=model_key)
-
-    preds = model(x, key=run_key)
-    print("Predictions shape:", preds.shape)  # Expected: (8, 1)
+    key = jr.PRNGKey(0)
+    # Suggested hyperparameters for a univariate time series:
+    # seq_len = 10, d = 1, hidden_size = 12.
+    model, state = eqx.nn.make_with_state(MambaStateSpaceForecast)(
+        seq_len=10,
+        d=1,
+        hidden_size=12,
+        key=key
+    )
+    trainer = ForecastingModel(lr=1e-3)
+    model, state = trainer.fit(
+        model, state, X_train, y_train, X_val, y_val,
+        num_epochs=500, patience=100, key=jr.PRNGKey(42)
+    )
+    preds = trainer.predict(model, state, X_val, key=jr.PRNGKey(123))
+    print(f"preds shape: {preds.shape}")
+    trainer.visualize(y_val, preds, title="Forecast vs. Ground Truth")

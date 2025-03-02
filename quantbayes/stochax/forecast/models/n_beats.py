@@ -4,17 +4,8 @@ import jax.nn as jnn
 import equinox as eqx
 from typing import List
 
-
 # -------------------------------------------------------
 # NBeatsBlock
-#
-# A simplified block that maps an input vector x (of dimension in_features)
-# through several fully connected layers (with ReLU activation) to produce:
-#   - a forecast vector (of dimension forecast_dim, here 1), and
-#   - a backcast vector (of the same dimension as x).
-#
-# In the full N‑BEATS architecture the backcast is used to “explain away”
-# the input; the forecast contributions are summed across blocks.
 # -------------------------------------------------------
 class NBeatsBlock(eqx.Module):
     fc_layers: List[eqx.nn.Linear]
@@ -32,20 +23,12 @@ class NBeatsBlock(eqx.Module):
         key
     ):
         keys = jax.random.split(key, num_fc_layers + 2)
-        # Create a list of fully-connected layers.
         self.fc_layers = []
         for i in range(num_fc_layers):
-            # For the first layer, input dimension is in_features; then hidden_features.
             input_dim = in_features if i == 0 else hidden_features
-            self.fc_layers.append(
-                eqx.nn.Linear(input_dim, hidden_features, key=keys[i])
-            )
-        self.forecast_layer = eqx.nn.Linear(
-            hidden_features, forecast_dim, key=keys[num_fc_layers]
-        )
-        self.backcast_layer = eqx.nn.Linear(
-            hidden_features, in_features, key=keys[num_fc_layers + 1]
-        )
+            self.fc_layers.append(eqx.nn.Linear(input_dim, hidden_features, key=keys[i]))
+        self.forecast_layer = eqx.nn.Linear(hidden_features, forecast_dim, key=keys[num_fc_layers])
+        self.backcast_layer = eqx.nn.Linear(hidden_features, in_features, key=keys[num_fc_layers+1])
         self.activation = jnn.relu
 
     def __call__(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -57,13 +40,8 @@ class NBeatsBlock(eqx.Module):
         backcast = self.backcast_layer(h)  # shape (in_features,)
         return forecast, backcast
 
-
 # -------------------------------------------------------
 # NBeats
-#
-# The overall model is a stack of NBeatsBlocks.
-# For a given block, its forecast is added to the cumulative forecast,
-# and its backcast is subtracted from the input before the next block.
 # -------------------------------------------------------
 class NBeats(eqx.Module):
     blocks: List[NBeatsBlock]
@@ -83,9 +61,7 @@ class NBeats(eqx.Module):
     ):
         keys = jax.random.split(key, num_blocks)
         self.blocks = [
-            NBeatsBlock(
-                in_features, hidden_features, forecast_dim, num_fc_layers, key=k
-            )
+            NBeatsBlock(in_features, hidden_features, forecast_dim, num_fc_layers, key=k)
             for k in keys
         ]
         self.num_blocks = num_blocks
@@ -94,7 +70,6 @@ class NBeats(eqx.Module):
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         # x: shape (in_features,)
-        # Initialize cumulative forecast.
         forecast_sum = 0.0
         residual = x
         for block in self.blocks:
@@ -103,15 +78,8 @@ class NBeats(eqx.Module):
             residual = residual - b
         return forecast_sum
 
-
 # -------------------------------------------------------
-# NBeatsForecast
-#
-# A wrapper that:
-#   1. Accepts inputs of shape [N, seq_len, D].
-#   2. Flattens each sample to shape [seq_len * D].
-#   3. Applies the NBeats model to produce a forecast (of shape [1]).
-#   4. vmaps over the batch dimension so that the output is [N, 1].
+# NBeatsForecast Wrapper
 # -------------------------------------------------------
 class NBeatsForecast(eqx.Module):
     model: NBeats
@@ -128,52 +96,60 @@ class NBeatsForecast(eqx.Module):
         *,
         key
     ):
+        # For a sample of shape (seq_len, d), the flattened input has length seq_len*d.
         in_features = seq_len * d
         forecast_dim = 1
-        self.model = NBeats(
-            in_features,
-            forecast_dim,
-            num_blocks,
-            hidden_features,
-            num_fc_layers,
-            key=key,
-        )
+        self.model = NBeats(in_features, forecast_dim, num_blocks, hidden_features, num_fc_layers, key=key)
         self.seq_len = seq_len
         self.d = d
 
-    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, state: eqx.nn.State, *, key=None) -> tuple[jnp.ndarray, any]:
         """
         Args:
-          x: Input tensor of shape [N, seq_len, D]
+          x: Input tensor of shape [N, seq_len, d]
         Returns:
           Forecasts of shape [N, 1]
         """
-        # Flatten each sample along the time and feature dimensions.
-        batch_size = x.shape[0]
-        x_flat = x.reshape(batch_size, self.seq_len * self.d)
-        # Apply the model to each sample via vmap.
-        forecasts = jax.vmap(self.model)(x_flat)  # shape [N, 1]
-        return forecasts, state
-
+        # If our training framework vmaps over samples, each call receives a single sample of shape (seq_len, d).
+        # So, we flatten it to a vector of length (seq_len * d).
+        x_flat = x.reshape(self.seq_len * self.d)
+        forecast = self.model(x_flat)  # shape (1,)
+        return forecast, state
 
 # -------------------------------------------------------
 # Example usage
 # -------------------------------------------------------
 if __name__ == "__main__":
-    # For example, a batch of 8 sequences, each of length 20, with 32 features.
-    N, seq_len, D = 8, 20, 32
-    key = jax.random.PRNGKey(42)
-    x = jax.random.normal(key, (N, seq_len, D))
+    import jax.random as jr
+    from quantbayes.fake_data import create_synthetic_time_series
+    from quantbayes.stochax.forecast import ForecastingModel
 
-    # Hyperparameters for the NBeats network.
-    num_blocks = 3  # number of blocks to stack
-    hidden_features = 128  # hidden layer size within each block
-    num_fc_layers = 3  # number of fully connected layers per block
+    # Create synthetic data.
+    X_train, X_val, y_train, y_val = create_synthetic_time_series()
+    # Reshape raw input to [N, seq_len, d] with d == 1.
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+    X_val = X_val.reshape(X_val.shape[0], X_val.shape[1], 1)
+    y_train = y_train.reshape(y_train.shape[0], -1)
+    y_val = y_val.reshape(y_val.shape[0], -1)
+    print(f"X train shape: {X_train.shape}")
+    print(f"y train shape: {y_train.shape}")
 
-    model_key, run_key = jax.random.split(key)
-    model = NBeatsForecast(
-        seq_len, D, num_blocks, hidden_features, num_fc_layers, key=model_key
+    key = jr.PRNGKey(0)
+    # Suggested hyperparameters:
+    #   seq_len = 10, d = 1, num_blocks = 4, hidden_features = 12, num_fc_layers = 3.
+    model, state = eqx.nn.make_with_state(NBeatsForecast)(
+        seq_len=10,
+        d=1,
+        num_blocks=4,
+        hidden_features=12,
+        num_fc_layers=3,
+        key=key
     )
-
-    preds = model(x)
-    print("Predictions shape:", preds.shape)  # Expected: (8, 1)
+    trainer = ForecastingModel(lr=1e-3)
+    model, state = trainer.fit(
+        model, state, X_train, y_train, X_val, y_val,
+        num_epochs=500, patience=100, key=jr.PRNGKey(42)
+    )
+    preds = trainer.predict(model, state, X_val, key=jr.PRNGKey(123))
+    print(f"preds shape {preds.shape}")
+    trainer.visualize(y_val, preds, title="Forecast vs. Ground Truth")
